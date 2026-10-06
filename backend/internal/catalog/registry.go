@@ -11,6 +11,11 @@ var appShapesByID = map[string]AppShape{
 		Name:        "Microservices (go-micro)",
 		Description: "Separate Go services connected with go-micro",
 	},
+	ShapeOneShotJob: {
+		ID:          ShapeOneShotJob,
+		Name:        "One-shot job",
+		Description: "Run a Go task once and exit: scraping, ETL, or maintenance",
+	},
 }
 
 var architecturesByID = map[string]Architecture{
@@ -29,38 +34,48 @@ var architecturesByID = map[string]Architecture{
 		Name:        "Domain-Driven Design",
 		Description: "Bounded contexts and explicit domain models",
 	},
+	ArchitecturePipeline: {
+		ID:          ArchitecturePipeline,
+		Name:        "Pipeline",
+		Description: "Run ordered, context-aware stages and exit",
+	},
 }
 
 var templatesByID = map[string]Template{
-	"go-monolith-layered": newTemplate(
-		"go-monolith-layered", "Go Monolith - Layered",
+	TemplateGoMonolithLayered: newTemplate(
+		TemplateGoMonolithLayered, "Go Monolith - Layered",
 		"HTTP API starter with handler, service, and repository layers",
 		ShapeMonolith, ArchitectureLayered, "",
 	),
-	"go-monolith-clean-hexagonal": newTemplate(
-		"go-monolith-clean-hexagonal", "Go Monolith - Clean / Hexagonal",
+	TemplateGoMonolithClean: newTemplate(
+		TemplateGoMonolithClean, "Go Monolith - Clean / Hexagonal",
 		"HTTP API starter with use cases, ports, and adapters",
 		ShapeMonolith, ArchitectureClean, "",
 	),
-	"go-monolith-ddd": newTemplate(
-		"go-monolith-ddd", "Go Monolith - Domain-Driven Design",
+	TemplateGoMonolithDDD: newTemplate(
+		TemplateGoMonolithDDD, "Go Monolith - Domain-Driven Design",
 		"HTTP API starter organized around bounded contexts",
 		ShapeMonolith, ArchitectureDDD, "",
 	),
-	"go-microservices-layered": newTemplate(
-		"go-microservices-layered", "Go Microservices - Layered",
+	TemplateGoMicroservicesLayered: newTemplate(
+		TemplateGoMicroservicesLayered, "Go Microservices - Layered",
 		"go-micro service starter with handler, service, and repository layers",
 		ShapeMicroservices, ArchitectureLayered, "go-micro",
 	),
-	"go-microservices-clean-hexagonal": newTemplate(
-		"go-microservices-clean-hexagonal", "Go Microservices - Clean / Hexagonal",
+	TemplateGoMicroservicesClean: newTemplate(
+		TemplateGoMicroservicesClean, "Go Microservices - Clean / Hexagonal",
 		"go-micro service starter with use cases, ports, and adapters",
 		ShapeMicroservices, ArchitectureClean, "go-micro",
 	),
-	"go-microservices-ddd": newTemplate(
-		"go-microservices-ddd", "Go Microservices - Domain-Driven Design",
+	TemplateGoMicroservicesDDD: newTemplate(
+		TemplateGoMicroservicesDDD, "Go Microservices - Domain-Driven Design",
 		"go-micro services organized around bounded contexts",
 		ShapeMicroservices, ArchitectureDDD, "go-micro",
+	),
+	TemplateGoOneShotPipeline: newTemplate(
+		TemplateGoOneShotPipeline, "Go One-shot Job - Pipeline",
+		"Context-aware job pipeline for ETL, scraping, and maintenance work",
+		ShapeOneShotJob, ArchitecturePipeline, "",
 	),
 }
 
@@ -98,7 +113,11 @@ func newTemplate(id, name, description, shapeID, architectureID, serviceFramewor
 }
 
 func AppShapes() []AppShape {
-	return []AppShape{appShapesByID[ShapeMonolith], appShapesByID[ShapeMicroservices]}
+	return []AppShape{
+		appShapesByID[ShapeMonolith],
+		appShapesByID[ShapeMicroservices],
+		appShapesByID[ShapeOneShotJob],
+	}
 }
 
 func AppShapeByID(id string) (AppShape, bool) {
@@ -111,7 +130,24 @@ func Architectures() []Architecture {
 		architecturesByID[ArchitectureLayered],
 		architecturesByID[ArchitectureClean],
 		architecturesByID[ArchitectureDDD],
+		architecturesByID[ArchitecturePipeline],
 	}
+}
+
+func ArchitecturesForShape(shapeID string) []Architecture {
+	available := make(map[string]struct{})
+	for _, template := range Templates() {
+		if template.AppShapeID == shapeID {
+			available[template.ArchitectureID] = struct{}{}
+		}
+	}
+	var result []Architecture
+	for _, architecture := range Architectures() {
+		if _, ok := available[architecture.ID]; ok {
+			result = append(result, architecture)
+		}
+	}
+	return result
 }
 
 func ArchitectureByID(id string) (Architecture, bool) {
@@ -121,12 +157,13 @@ func ArchitectureByID(id string) (Architecture, bool) {
 
 func Templates() []Template {
 	return []Template{
-		templatesByID["go-monolith-layered"],
-		templatesByID["go-monolith-clean-hexagonal"],
-		templatesByID["go-monolith-ddd"],
-		templatesByID["go-microservices-layered"],
-		templatesByID["go-microservices-clean-hexagonal"],
-		templatesByID["go-microservices-ddd"],
+		templatesByID[TemplateGoMonolithLayered],
+		templatesByID[TemplateGoMonolithClean],
+		templatesByID[TemplateGoMonolithDDD],
+		templatesByID[TemplateGoMicroservicesLayered],
+		templatesByID[TemplateGoMicroservicesClean],
+		templatesByID[TemplateGoMicroservicesDDD],
+		templatesByID[TemplateGoOneShotPipeline],
 	}
 }
 

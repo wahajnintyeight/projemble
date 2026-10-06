@@ -29,7 +29,7 @@ func (w *agentWorkspace) Render(width, height int, rows []string, options genera
 	composerTop := height - composerHeight
 	popupHeight := 0
 	if w.mentions.active(path, w.composer) {
-		popupHeight = min(10, max(3, composerTop-top))
+		popupHeight = min(10, max(0, composerTop-top))
 		if popupHeight < 3 {
 			popupHeight = 0
 		}
@@ -49,6 +49,6 @@ func (w *agentWorkspace) Render(width, height int, rows []string, options genera
 		ui.Render(w.header, w.transcript, w.composer)
 	}
 	if popupHeight > 0 {
-		w.mentions.draw(path, w.composer, leftWidth, composerTop)
+		w.mentions.draw(path, w.composer, leftWidth, composerTop, popupHeight)
 	}
 }

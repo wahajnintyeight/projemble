@@ -19,6 +19,9 @@ func (workspace *agentWorkspace) Handle(event ui.Event, busy bool) workspaceActi
 		case "<Down>":
 			workspace.mentions.list.ScrollDown()
 			return workspaceAction{}
+		case "<C-r>":
+			workspace.mentions.reloadIndex()
+			return workspaceAction{}
 		case "<Enter>", "<Tab>":
 			if workspace.mentions.choose(workspace.composer) {
 				return workspaceAction{}

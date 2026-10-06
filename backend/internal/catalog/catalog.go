@@ -5,10 +5,20 @@ const (
 
 	ShapeMonolith      = "monolith"
 	ShapeMicroservices = "microservices"
+	ShapeOneShotJob    = "one-shot-job"
 
 	ArchitectureLayered = "layered"
 	ArchitectureClean   = "clean-hexagonal"
 	ArchitectureDDD     = "ddd"
+	ArchitecturePipeline = "pipeline"
+
+	TemplateGoMonolithLayered       = "go-monolith-layered"
+	TemplateGoMonolithClean         = "go-monolith-clean-hexagonal"
+	TemplateGoMonolithDDD           = "go-monolith-ddd"
+	TemplateGoMicroservicesLayered  = "go-microservices-layered"
+	TemplateGoMicroservicesClean    = "go-microservices-clean-hexagonal"
+	TemplateGoMicroservicesDDD      = "go-microservices-ddd"
+	TemplateGoOneShotPipeline       = "go-one-shot-pipeline"
 
 	SettingStack            = "stack"
 	SettingServiceFramework = "service-framework"

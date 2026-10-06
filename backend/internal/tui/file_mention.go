@@ -1,26 +1,37 @@
 package tui
 
 import (
+	"context"
 	"fmt"
-	ui "github.com/metaspartan/gotui/v5"
-	"github.com/metaspartan/gotui/v5/widgets"
 	"image"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
+
+	ui "github.com/metaspartan/gotui/v5"
+	"github.com/metaspartan/gotui/v5/widgets"
 )
 
-const maxMentionEntries = 500
+const maxMentionEntries = 120
 
 type fileMention struct {
-	list        *widgets.List
-	root, token string
-	start, end  int
-	paths       []string
-	visible     bool
-	dismissed   string
-	error       string
+	list            *widgets.List
+	root, token     string
+	start, end      int
+	paths           []string
+	visible         bool
+	dismissed       string
+	error           string
+	indexRoot       string
+	indexGeneration uint64
+	index           []string
+	indexReady      bool
+	indexing        bool
+	truncated       bool
+	indexCancel     context.CancelFunc
+	updates         chan mentionIndexUpdate
 }
 
 func newFileMention() *fileMention {
@@ -28,11 +39,14 @@ func newFileMention() *fileMention {
 	l.Border = true
 	l.Title = "Project files"
 	themeList(l)
-	return &fileMention{list: l}
+	return &fileMention{list: l, updates: make(chan mentionIndexUpdate, 1)}
 }
 
-// refresh lists only the current @path directory; query and result counts stay bounded.
 func (m *fileMention) refresh(root, token string, start, end int) {
+	selectedPath := ""
+	if m.list.SelectedRow >= 0 && m.list.SelectedRow < len(m.paths) {
+		selectedPath = m.paths[m.list.SelectedRow]
+	}
 	m.root, m.token, m.start, m.end = root, token, start, end
 	m.visible = true
 	m.error = ""
@@ -49,29 +63,103 @@ func (m *fileMention) refresh(root, token string, start, end int) {
 		m.error = "Path must stay within this project"
 		return
 	}
-	entries, err := readMentionEntries(base)
-	if err != nil {
-		m.visible = false
-		m.error = fmt.Sprintf("Cannot list %s: %s", filepath.ToSlash(directory), err)
-		return
+	if directory == "" {
+		m.ensureIndex(root)
 	}
-	needle := strings.ToLower(query)
-	m.paths = m.paths[:0]
-	for _, entry := range entries {
-		name := entry.Name()
-		if !strings.Contains(strings.ToLower(name), needle) {
-			continue
+	var candidates []string
+	if directory != "" {
+		entries, err := readMentionEntries(base)
+		if err != nil {
+			m.visible = false
+			m.error = fmt.Sprintf("Cannot list %s: %s", filepath.ToSlash(directory), err)
+			return
 		}
-		path := filepath.ToSlash(filepath.Join(directory, name))
-		if entry.IsDir() {
-			path += "/"
+		for _, entry := range entries {
+			if entry.IsDir() && ignoredMentionDirectory(entry.Name()) {
+				continue
+			}
+			path := filepath.ToSlash(filepath.Join(directory, entry.Name()))
+			if entry.IsDir() {
+				path += "/"
+			}
+			candidates = append(candidates, path)
 		}
-		m.paths = append(m.paths, path)
-		if len(m.paths) >= maxMentionEntries {
+	} else {
+		candidates = append(candidates, m.index...)
+		if len(candidates) == 0 {
+			entries, err := readMentionEntries(base)
+			if err != nil {
+				m.visible = false
+				m.error = err.Error()
+				return
+			}
+			for _, entry := range entries {
+				if entry.IsDir() && ignoredMentionDirectory(entry.Name()) {
+					continue
+				}
+				path := entry.Name()
+				if entry.IsDir() {
+					path += "/"
+				}
+				candidates = append(candidates, path)
+			}
+		}
+	}
+	m.paths = rankMentionPaths(candidates, query, maxMentionEntries)
+	m.list.SelectedRow = 0
+	for i, path := range m.paths {
+		if path == selectedPath {
+			m.list.SelectedRow = i
 			break
 		}
 	}
-	m.list.SelectedRow = 0
+}
+
+func (m *fileMention) ensureIndex(root string) {
+	if m.indexRoot == root && (m.indexing || m.indexReady) {
+		return
+	}
+	if m.indexCancel != nil {
+		m.indexCancel()
+	}
+	m.indexRoot, m.index, m.indexReady, m.truncated, m.indexing = root, nil, false, false, true
+	m.indexGeneration++
+	generation := m.indexGeneration
+	ctx, cancel := context.WithCancel(context.Background())
+	m.indexCancel = cancel
+	updates := m.updates
+	go func() {
+		paths, truncated, err := scanMentionTree(ctx, root, maxIndexedEntries)
+		if ctx.Err() != nil {
+			return
+		}
+		updates <- mentionIndexUpdate{root: root, generation: generation, paths: paths, truncated: truncated, err: err}
+	}()
+}
+
+func (m *fileMention) receive(update mentionIndexUpdate) {
+	if update.root != m.indexRoot || update.generation != m.indexGeneration {
+		return
+	}
+	m.index, m.indexReady, m.truncated, m.indexing = update.paths, true, update.truncated, false
+	if m.indexCancel != nil {
+		m.indexCancel()
+		m.indexCancel = nil
+	}
+	if update.err != nil {
+		m.error = update.err.Error()
+	}
+	m.token = "" // refresh the active query with the finished tree index.
+}
+
+func (m *fileMention) reloadIndex() {
+	if m.indexCancel != nil {
+		m.indexCancel()
+		m.indexCancel = nil
+	}
+	m.indexRoot, m.index, m.indexReady, m.truncated, m.indexing = "", nil, false, false, false
+	m.indexGeneration++
+	m.token = ""
 }
 
 func readMentionEntries(path string) ([]os.DirEntry, error) {
@@ -81,7 +169,7 @@ func readMentionEntries(path string) ([]os.DirEntry, error) {
 	}
 	defer dir.Close()
 	entries, err := dir.ReadDir(maxMentionEntries + 1)
-	if err != nil && len(entries) == 0 {
+	if err != nil && err != io.EOF && len(entries) == 0 {
 		return nil, err
 	}
 	sort.Slice(entries, func(i, j int) bool { return entries[i].Name() < entries[j].Name() })
@@ -100,7 +188,7 @@ func mentionAtCursor(c *messageComposer) (string, int, int, bool) {
 	x := min(c.Cursor.X, len(line))
 	start := -1
 	for i := x - 1; i >= 0; i-- {
-		if line[i] == ' ' || line[i] == '\t' {
+		if line[i] == '\n' {
 			break
 		}
 		if line[i] == '@' {
@@ -132,7 +220,7 @@ func (m *fileMention) active(root string, c *messageComposer) bool {
 	return m.visible
 }
 
-func (m *fileMention) draw(root string, c *messageComposer, width, end int) int {
+func (m *fileMention) draw(root string, c *messageComposer, width, end, available int) int {
 	if !m.active(root, c) {
 		return 0
 	}
@@ -142,18 +230,24 @@ func (m *fileMention) draw(root string, c *messageComposer, width, end int) int 
 	rows := make([]string, 0, len(m.paths))
 	for _, path := range m.paths {
 		if strings.HasSuffix(path, "/") {
-			rows = append(rows, styledMarkdown("DIR  ", "fg:cyan,mod:bold")+path)
+			rows = append(rows, styledMarkdown(filepath.FromSlash(path), "fg:cyan,mod:bold"))
 		} else {
-			rows = append(rows, styledMarkdown("FILE ", "fg:lightblue,mod:bold")+path)
+			rows = append(rows, filepath.FromSlash(path))
 		}
 	}
 	if len(rows) == 0 {
 		rows = []string{"No matching project files"}
 	}
 	m.list.Rows = rows
-	m.list.Title = "@ files and folders · select to attach a path"
+	m.list.Title = fmt.Sprintf("@%s | %d matches | Up/Down select | Enter attach/open | Ctrl+R refresh | Esc close", strings.TrimPrefix(m.token, "@"), len(m.paths))
+	if m.indexing {
+		m.list.Title = fmt.Sprintf("@%s | indexing in background | current-folder matches | Ctrl+R refresh", strings.TrimPrefix(m.token, "@"))
+	}
+	if m.truncated {
+		m.list.Title += " | index limit reached; browse folders to continue"
+	}
 	m.list.SelectedRow = min(m.list.SelectedRow, len(rows)-1)
-	visibleRows := min(8, len(rows))
+	visibleRows := min(8, len(rows), max(1, available-2))
 	popupHeight := visibleRows + 2
 	m.list.SetRect(0, end-popupHeight, width, end)
 	ui.Render(m.list)

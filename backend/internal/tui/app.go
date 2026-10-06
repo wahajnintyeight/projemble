@@ -305,12 +305,19 @@ func runWithInitializer(initialize func() error) error {
 
 		var event ui.Event
 		var animationEvents <-chan time.Time
+		var mentionIndexEvents <-chan mentionIndexUpdate
 		if currentPage == agentProgressPage && generationRunning {
 			animationEvents = animationTicker.C
+		}
+		if currentPage == agentProgressPage {
+			mentionIndexEvents = workspace.mentions.updates
 		}
 		select {
 		case result := <-models.results:
 			models.receive(result)
+			continue
+		case update := <-mentionIndexEvents:
+			workspace.mentions.receive(update)
 			continue
 		case <-animationEvents:
 			workspace.Tick()

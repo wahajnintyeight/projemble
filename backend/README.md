@@ -95,6 +95,7 @@ On wide terminals, the conversation and message input occupy the left side; a se
 - **F4:** choose another model for the current project.
 - **Ctrl+O:** toggle compact activity and the full transcript.
 - **PageUp / PageDown:** review rendered conversation lines.
+- Type **@** in a message to browse and attach files from the current project; select a directory to open it and a file to insert its relative path. The message box wraps long drafts and grows while space allows, then scrolls to keep the cursor visible.
 
 Switching views during an instruction cancels that instruction and waits for it to stop. Pending instructions are cleared. Provider/model changes reuse the saved conversation and update the project's YAML profile. The model picker retrieves the provider's catalog with a timeout; **Ctrl+R** refreshes it. A custom model ID is available when discovery fails or is unsupported, including the current ChatGPT integration. Listing a model does not guarantee account quota or tool support.
 
