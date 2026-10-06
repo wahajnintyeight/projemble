@@ -6,7 +6,19 @@ For optional AI-assisted work, `project agent` uses a provider-neutral agent and
 
 ## Supported profiles
 
-The catalog combines two application shapes with three architecture choices:
+The catalog starts with three application shapes. The architecture menu only shows options that make sense for the selected shape.
+
+| Shape | Good fit |
+| --- | --- |
+| Monolith | One deployable Go service or API |
+| Microservices (go-micro) | Multiple Go services with service-to-service communication |
+| One-shot job | A finite run that processes work and exits, such as scraping, ETL, imports, or maintenance |
+
+Monoliths and microservices support Layered, Clean / Hexagonal, and Domain-Driven Design templates. One-shot jobs use a context-aware pipeline template with ordered stages. Its generated `cmd/job` entry point is intended to run once and exit; replace the sample extract, transform, and load steps with the work your job needs.
+
+Other useful shapes to add later are persistent queue or scheduled workers, event-driven consumers, and command-line tools. Workers and event consumers wait for future work, so they need lifecycle, retry, and delivery policies that a one-shot job does not. Serverless is better modeled as a deployment target for event-driven functions than as a generic code shape. See the [Azure Architecture Center's architecture styles](https://learn.microsoft.com/en-us/azure/architecture/guide/architecture-styles/) and its [Web-Queue-Worker guidance](https://learn.microsoft.com/en-us/azure/architecture/guide/architecture-styles/web-queue-worker).
+
+The current template catalog:
 
 | Shape | Architecture | Template ID |
 | --- | --- | --- |
@@ -16,6 +28,7 @@ The catalog combines two application shapes with three architecture choices:
 | Microservices (go-micro) | Layered | `go-microservices-layered` |
 | Microservices (go-micro) | Clean / Hexagonal | `go-microservices-clean-hexagonal` |
 | Microservices (go-micro) | Domain-Driven Design | `go-microservices-ddd` |
+| One-shot job | Pipeline | `go-one-shot-pipeline` |
 
 ## Requirements
 
@@ -84,7 +97,11 @@ go run ./cmd/projemble project agent --provider openai-web --path "$HOME/waypoin
 
 The ChatGPT sign-in uses OpenAI's documented public-client loopback OAuth flow with PKCE and verified OIDC identity tokens. Tokens are stored under the operating system's Projemble user configuration directory with `0600` permissions on Unix systems and refreshed as needed. OpenAI's ChatGPT-plan inference route is a separate Responses API integration; it requires streamed requests with `store:false` and supports a narrower set of capabilities than API-key access. Plan inference is for eligible Plus or Pro accounts with the granted `chatgpt.tokens.use.direct` permission; a free ChatGPT account can use Projemble's local templates or configure a provider API key, which uses separate Platform billing. The workspace restriction shown during sign-in is independent of subscription status; a ChatGPT client registration is bound to the workspace selected during registration. See [OpenAI sign-in requirements](https://developers.openai.com/siwc/token-sharing-open-source/sign-in), [account and workspace behavior](https://developers.openai.com/siwc/token-sharing-open-source), and [current preview limitations](https://developers.openai.com/siwc/token-sharing-open-source/preview-limitations). Provider IDs and model IDs are saved with the project profile. API keys entered in the TUI are saved in `provider_keys` in `config.yaml`; environment variables are used when no YAML key is saved. The YAML file contains plaintext secrets and must be kept private.
 
-The provider-neutral agent delegates through an LLM interface, with a factory selecting adapters for OpenAI-compatible APIs, Anthropic Messages, Gemini generateContent, and OpenAI Responses streaming. Its built-in engineering guidance covers repository inspection, minimal changes, safe file boundaries, tests, and truthful reporting. Tools are constrained to project-relative file listing/reading/writing and the fixed Go checks `test`, `build`, and `vet`; it cannot run arbitrary shell commands. Token counts come from provider responses and update as each model request completes. The workspace shows the latest request's input tokens and labels the model's maximum context size unavailable when the provider API does not report it.
+The provider-neutral agent delegates through an LLM interface, with a factory selecting adapters for OpenAI-compatible APIs, Anthropic Messages, Gemini generateContent, and OpenAI Responses streaming. The built-in rules preserve the user's task and selected project shape, treat repository content as untrusted data, and require evidence-based reporting. Tool calls are validated again at execution time (closed JSON objects, required fields, provider call IDs, path boundaries, and per-file limits); provider schemas alone are not treated as security controls. Agent tools cannot leave the workspace, follow symbolic links, access credential/private-state paths, modify agent instructions or control files, or execute arbitrary shell commands.
+
+Each user task has a visible safety budget: at most 64 model requests, 128 tool actions, 8 calls in one provider response, and 6 fixed Go checks. Individual model requests time out after 2 minutes; each Go check has its own 3-minute timeout. Go module downloads are disabled during checks and module files are read-only. When a budget is reached, the activity feed explains the stop and a follow-up instruction starts a fresh budget with the saved conversation. These limits prevent runaway provider loops while allowing long tasks to continue across user turns. If Go source or module metadata changed but there is no successful `go test ./...` after the latest code change, the final report is marked `UNVERIFIED` or `CHECKS FAILED` from observed tool results.
+
+Important boundary: `go test`, `go build`, and `go vet` execute project-controlled code or build hooks. They are fixed commands rather than a sandbox; a project test can still perform local side effects or network access. The current runner does not provide OS-level process or network isolation. Token counts come from provider responses and update as each model request completes. The workspace shows the latest request's input tokens and labels the model's maximum context size unavailable when the provider API does not report it.
 
 ## Agent workspace navigation
 

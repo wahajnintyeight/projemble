@@ -208,8 +208,24 @@ func appShapeChoices() []catalogChoice {
 	return result
 }
 
-func architectureChoices() []catalogChoice {
-	choices := catalog.Architectures()
+func appShapeIDAt(index int) string {
+	choices := catalog.AppShapes()
+	if index < 0 || index >= len(choices) {
+		return ""
+	}
+	return choices[index].ID
+}
+
+func clampArchitectureIndex(shapeIndex, architectureIndex int) int {
+	architectures := catalog.ArchitecturesForShape(appShapeIDAt(shapeIndex))
+	if len(architectures) == 0 {
+		return 0
+	}
+	return min(max(architectureIndex, 0), len(architectures)-1)
+}
+
+func architectureChoices(shapeID string) []catalogChoice {
+	choices := catalog.ArchitecturesForShape(shapeID)
 	result := make([]catalogChoice, 0, len(choices))
 	for _, choice := range choices {
 		result = append(result, catalogChoice{name: choice.Name, description: choice.Description})
@@ -389,8 +405,11 @@ func providerAtIndex(id llm.ProviderID) (string, bool) {
 
 func templateForChoices(shapeIndex, architectureIndex int) (catalog.Template, bool) {
 	shapes := catalog.AppShapes()
-	architectures := catalog.Architectures()
-	if shapeIndex < 0 || shapeIndex >= len(shapes) || architectureIndex < 0 || architectureIndex >= len(architectures) {
+	if shapeIndex < 0 || shapeIndex >= len(shapes) {
+		return catalog.Template{}, false
+	}
+	architectures := catalog.ArchitecturesForShape(shapes[shapeIndex].ID)
+	if architectureIndex < 0 || architectureIndex >= len(architectures) {
 		return catalog.Template{}, false
 	}
 	for _, template := range catalog.Templates() {

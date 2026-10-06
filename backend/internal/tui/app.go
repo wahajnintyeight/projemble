@@ -274,7 +274,7 @@ func runWithInitializer(initialize func() error) error {
 			updateChoiceList(list, "Choose the application shape", appShapeChoices(), selectedShape, width, height)
 			ui.Render(list)
 		case architecturePage:
-			updateChoiceList(list, "Choose the architecture", architectureChoices(), selectedArchitecture, width, height)
+			updateChoiceList(list, "Choose the architecture", architectureChoices(appShapeIDAt(selectedShape)), selectedArchitecture, width, height)
 			ui.Render(list)
 		case summaryPage:
 			template, ok := templateForChoices(selectedShape, selectedArchitecture)
@@ -700,6 +700,7 @@ func runWithInitializer(initialize func() error) error {
 					selectedProvider = list.SelectedRow
 				case appShapePage:
 					selectedShape = list.SelectedRow
+					selectedArchitecture = clampArchitectureIndex(selectedShape, selectedArchitecture)
 				case architecturePage:
 					selectedArchitecture = list.SelectedRow
 				}
@@ -723,6 +724,7 @@ func runWithInitializer(initialize func() error) error {
 					selectedProvider = list.SelectedRow
 				case appShapePage:
 					selectedShape = list.SelectedRow
+					selectedArchitecture = clampArchitectureIndex(selectedShape, selectedArchitecture)
 				case architecturePage:
 					selectedArchitecture = list.SelectedRow
 				}
@@ -798,7 +800,7 @@ func runWithInitializer(initialize func() error) error {
 							selectedShape = i
 						}
 					}
-					for i, architecture := range catalog.Architectures() {
+					for i, architecture := range catalog.ArchitecturesForShape(project.AppShapeID) {
 						if architecture.ID == project.ArchitectureID {
 							selectedArchitecture = i
 						}
@@ -895,6 +897,7 @@ func runWithInitializer(initialize func() error) error {
 				validationMessage = ""
 			case appShapePage:
 				selectedShape = list.SelectedRow
+				selectedArchitecture = clampArchitectureIndex(selectedShape, selectedArchitecture)
 				currentPage = architecturePage
 			case architecturePage:
 				selectedArchitecture = list.SelectedRow

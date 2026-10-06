@@ -21,17 +21,28 @@ func TestGenerateEveryCatalogTemplate(t *testing.T) {
 				t.Fatal(err)
 			}
 			applicationFile := "internal/service/service.go"
-			if template.ArchitectureID == catalog.ArchitectureClean {
+			switch {
+			case template.AppShapeID == catalog.ShapeOneShotJob:
+				applicationFile = "internal/job/pipeline.go"
+			case template.ArchitectureID == catalog.ArchitectureClean:
 				applicationFile = "internal/application/service.go"
-			} else if template.ArchitectureID == catalog.ArchitectureDDD {
+			case template.ArchitectureID == catalog.ArchitectureDDD:
 				applicationFile = "internal/greetings/application/service.go"
 			}
-			for _, name := range []string{"README.md", "go.mod", "cmd/server/main.go", applicationFile} {
+			entrypoint := "cmd/server/main.go"
+			if template.AppShapeID == catalog.ShapeOneShotJob {
+				entrypoint = "cmd/job/main.go"
+			}
+			for _, name := range []string{"README.md", "go.mod", entrypoint, applicationFile} {
 				if _, err := os.Stat(filepath.Join(root, filepath.FromSlash(name))); err != nil {
 					t.Errorf("generated file %s missing: %v", name, err)
 				}
 			}
-			mainSource, err := os.ReadFile(filepath.Join(root, "cmd", "server", "main.go"))
+			mainPath := filepath.Join(root, "cmd", "server", "main.go")
+			if template.AppShapeID == catalog.ShapeOneShotJob {
+				mainPath = filepath.Join(root, "cmd", "job", "main.go")
+			}
+			mainSource, err := os.ReadFile(mainPath)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -46,8 +57,16 @@ func TestGenerateEveryCatalogTemplate(t *testing.T) {
 					t.Fatalf("tidy generated module: %v", err)
 				}
 			}
+			if template.AppShapeID == catalog.ShapeOneShotJob && !strings.Contains(string(mainSource), "NewPipeline") {
+				t.Error("one-shot template does not run a pipeline")
+			}
 			if err := runGo(root, "test", "./..."); err != nil {
 				t.Fatalf("generated starter does not compile: %v", err)
+			}
+			if template.AppShapeID == catalog.ShapeOneShotJob {
+				if err := runGo(root, "run", "./cmd/job"); err != nil {
+					t.Fatalf("generated one-shot job does not run: %v", err)
+				}
 			}
 			if err := Generate(project); err == nil {
 				t.Error("second generation should refuse to overwrite existing files")

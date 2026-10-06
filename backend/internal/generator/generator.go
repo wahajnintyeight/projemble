@@ -27,18 +27,11 @@ func Generate(project projectstore.Project) error {
 		return fmt.Errorf("unknown project template %q", project.TemplateID)
 	}
 	module := modulePath(project.Name)
-	files := map[string]string{
-		"go.mod":             goMod(module, template),
-		"README.md":          readme(project, template, module),
-		".gitignore":         "/bin/\n",
-		"cmd/server/main.go": mainGo(module, template),
+	renderer, err := rendererFor(template)
+	if err != nil {
+		return err
 	}
-	for name, content := range architectureFiles(module, template) {
-		files[name] = content
-	}
-	if template.AppShapeID == catalog.ShapeMicroservices {
-		files["cmd/catalog/main.go"] = catalogServiceGo(module)
-	}
+	files := renderer.Files(project, template, module)
 	names := make([]string, 0, len(files))
 	for name := range files {
 		names = append(names, name)
@@ -285,12 +278,19 @@ func New(service application.Service) http.Handler {
 
 func readme(project projectstore.Project, template catalog.Template, module string) string {
 	var run string
-	if template.AppShapeID == catalog.ShapeMicroservices {
+	switch template.AppShapeID {
+	case catalog.ShapeOneShotJob:
+		run = "go run ./cmd/job"
+	case catalog.ShapeMicroservices:
 		run = "go mod tidy\n\n# Terminal 1\ngo run ./cmd/server\n\n# Terminal 2\ngo run ./cmd/catalog"
-	} else {
+	default:
 		run = "go run ./cmd/server"
 	}
-	return fmt.Sprintf("# %s\n\n%s\n\nGenerated from Projemble template `%s` (%s).\n\n## Run\n\n```sh\n%s\n```\n\n## Verify\n\n```sh\ngo test ./...\ngo vet ./...\ngo build ./...\n```\n\nGo module: `%s`.\n", project.Name, project.Description, template.ID, template.Name, run, module)
+	result := fmt.Sprintf("# %s\n\n%s\n\nGenerated from Projemble template `%s` (%s).\n\n## Run\n\n```sh\n%s\n```\n\n## Verify\n\n```sh\ngo test ./...\ngo vet ./...\ngo build ./...\n```\n\nGo module: `%s`.\n", project.Name, project.Description, template.ID, template.Name, run, module)
+	if template.AppShapeID == catalog.ShapeOneShotJob {
+		result += "\n## Adapt the pipeline\n\nUse the ordered stages in `cmd/job/main.go` for your task. For a scraper, implement fetch and parse stages; for ETL, implement extract, transform, and load. Return an error from a failed stage to stop the run. The pipeline accepts a context and exits when the work is done.\n"
+	}
+	return result
 }
 
 // Validate checks the profile fields needed for generation without changing the filesystem.

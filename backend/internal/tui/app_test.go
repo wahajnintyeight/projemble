@@ -394,6 +394,26 @@ func TestSaveWizardProfilesForEveryTemplate(t *testing.T) {
 	}
 }
 
+func TestTemplateSelectionFiltersArchitectureByShape(t *testing.T) {
+	jobShape := 0
+	for i, shape := range catalog.AppShapes() {
+		if shape.ID == catalog.ShapeOneShotJob {
+			jobShape = i
+			break
+		}
+	}
+	if got := clampArchitectureIndex(jobShape, 2); got != 0 {
+		t.Fatalf("one-shot architecture index = %d, want 0", got)
+	}
+	template, ok := templateForChoices(jobShape, 0)
+	if !ok || template.ID != catalog.TemplateGoOneShotPipeline {
+		t.Fatalf("one-shot selection = %+v, %v", template, ok)
+	}
+	if _, ok := templateForChoices(jobShape, 1); ok {
+		t.Fatal("one-shot shape accepted an unsupported architecture")
+	}
+}
+
 func TestAgentGenerationProfileStoresProviderAndModelOnly(t *testing.T) {
 	template := catalog.Templates()[0]
 	config := projectstore.NewConfig()
