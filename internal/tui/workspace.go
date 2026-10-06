@@ -11,15 +11,16 @@ const (
 )
 
 type agentWorkspace struct {
-	header     *sessionPanel
-	transcript *transcriptView
-	composer   *messageComposer
-	session    llm.Usage
-	last       llm.Usage
-	spinner    int
-	details    bool
-	navigation *sessionPanel
-	mentions   *fileMention
+	header      *sessionPanel
+	transcript  *transcriptView
+	composer    *messageComposer
+	session     llm.Usage
+	last        llm.Usage
+	spinner     int
+	details     bool
+	showSidebar bool
+	navigation  *sessionPanel
+	mentions    *fileMention
 }
 
 type workspaceAction struct {
@@ -45,7 +46,7 @@ func newAgentWorkspace() *agentWorkspace {
 	navigation := newSessionPanel()
 	navigation.Border = true
 	navigation.Title = "Navigate"
-	return &agentWorkspace{header: header, transcript: transcript, composer: composer, navigation: navigation, mentions: newFileMention()}
+	return &agentWorkspace{header: header, transcript: transcript, composer: composer, navigation: navigation, mentions: newFileMention(), showSidebar: true}
 }
 
 func (workspace *agentWorkspace) Tick() {

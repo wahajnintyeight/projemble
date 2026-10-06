@@ -111,6 +111,7 @@ On wide terminals, the conversation and message input occupy the left side; a se
 - **F3:** change the current project's provider.
 - **F4:** choose another model for the current project.
 - **Ctrl+O:** toggle compact activity and the full transcript.
+- **Ctrl+B:** hide or restore the complete session/context panel; the conversation expands to fill the space.
 - **PageUp / PageDown:** review rendered conversation lines.
 - Type **@** in a message to browse and attach files from the current project; select a directory to open it and a file to insert its relative path. The message box wraps long drafts and grows while space allows, then scrolls to keep the cursor visible.
 

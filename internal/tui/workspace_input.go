@@ -38,6 +38,9 @@ func (workspace *agentWorkspace) Handle(event ui.Event, busy bool) workspaceActi
 	case "<C-o>":
 		workspace.details = !workspace.details
 		return workspaceAction{}
+	case "<C-b>":
+		workspace.showSidebar = !workspace.showSidebar
+		return workspaceAction{}
 	case "<C-c>":
 		return workspaceAction{quit: true}
 	case "<PageUp>":
@@ -45,6 +48,12 @@ func (workspace *agentWorkspace) Handle(event ui.Event, busy bool) workspaceActi
 		return workspaceAction{scroll: true}
 	case "<PageDown>":
 		workspace.transcript.ScrollPageDown()
+		return workspaceAction{scroll: true, follow: workspace.transcript.AtBottom()}
+	case "<MouseWheelUp>":
+		workspace.transcript.ScrollLines(-3)
+		return workspaceAction{scroll: true}
+	case "<MouseWheelDown>":
+		workspace.transcript.ScrollLines(3)
 		return workspaceAction{scroll: true, follow: workspace.transcript.AtBottom()}
 	}
 	switch event.ID {

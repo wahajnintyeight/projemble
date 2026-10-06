@@ -5,6 +5,7 @@ import (
 	"os"
 
 	"github.com/gdamore/tcell/v3"
+	"github.com/mattn/go-runewidth"
 )
 
 // Render renders the given drawables to the screen.
@@ -77,15 +78,21 @@ func (b *Backend) renderBuffer(buf *Buffer) {
 	screenW, screenH := b.Screen.Size()
 
 	for i, cell := range buf.Cells {
-		if cell.Rune == 0 {
-			continue
-		}
-
 		x := (i % bufWidth) + buf.Min.X
 		y := (i / bufWidth) + buf.Min.Y
 
 		// Skip cells outside visible screen area
 		if x < 0 || y < 0 || x >= screenW || y >= screenH {
+			continue
+		}
+		if cell.Rune == 0 {
+			// A zero cell after a wide rune is its continuation; leave that cell
+			// to tcell, but clear every other untouched position to remove stale
+			// text when widgets shrink or move between frames.
+			if x > buf.Min.X && runewidth.RuneWidth(buf.Cells[i-1].Rune) == 2 {
+				continue
+			}
+			b.Screen.SetContent(x, y, ' ', nil, tcell.StyleDefault)
 			continue
 		}
 

@@ -16,6 +16,7 @@ type transcriptView struct {
 	rows    []string
 	lines   [][]ui.Cell
 	width   int
+	height  int
 	offset  int
 	details bool
 }
@@ -25,20 +26,35 @@ func newTranscriptView() *transcriptView {
 }
 
 func (v *transcriptView) content(rows []string, details, follow bool) {
-	width := max(1, min(100, v.Inner.Dx()-4))
-	if width != v.width || details != v.details || !slices.Equal(rows, v.rows) {
+	width, height := max(1, v.Inner.Dx()-4), v.Inner.Dy()
+	oldBottom := max(0, len(v.lines)-v.height)
+	wasAtBottom := v.offset >= oldBottom
+	layoutChanged := width != v.width || height != v.height || details != v.details
+	if layoutChanged || !slices.Equal(rows, v.rows) {
 		v.rows = slices.Clone(rows)
-		v.width, v.details = width, details
+		v.width, v.height, v.details = width, height, details
 		v.lines = nil
 		v.lines = formatTranscriptRows(borderedMessages(conversationRows(rows, details), width), width)
 	}
 	if follow {
 		v.offset = v.bottom()
+	} else if layoutChanged && wasAtBottom {
+		v.offset = v.bottom()
+	} else if layoutChanged && oldBottom > 0 {
+		v.offset = v.offset * v.bottom() / oldBottom
+	} else {
+		v.offset = min(max(0, v.offset), v.bottom())
 	}
-	v.offset = min(max(0, v.offset), v.bottom())
 	v.Title = "Conversation · compact · Ctrl+O details"
 	if details {
 		v.Title = "Conversation · full activity · Ctrl+O compact"
+	}
+	if len(v.lines) == 0 {
+		v.TitleBottom = "0 lines"
+	} else {
+		first := min(v.offset+1, len(v.lines))
+		last := min(v.offset+max(1, v.Inner.Dy()), len(v.lines))
+		v.TitleBottom = fmt.Sprintf("%d-%d/%d PgUp/Dn/Wheel", first, last, len(v.lines))
 	}
 }
 
@@ -167,6 +183,9 @@ func (v *transcriptView) AtBottom() bool { return v.offset >= v.bottom() }
 func (v *transcriptView) ScrollPageUp()  { v.offset = max(0, v.offset-max(1, v.Inner.Dy()-2)) }
 func (v *transcriptView) ScrollPageDown() {
 	v.offset = min(v.bottom(), v.offset+max(1, v.Inner.Dy()-2))
+}
+func (v *transcriptView) ScrollLines(lines int) {
+	v.offset = min(v.bottom(), max(0, v.offset+lines))
 }
 
 func (v *transcriptView) Draw(buf *ui.Buffer) {
