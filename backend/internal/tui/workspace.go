@@ -1,8 +1,6 @@
 package tui
 
 import (
-	"github.com/metaspartan/gotui/v5/widgets"
-
 	"projemble/internal/llm"
 )
 
@@ -15,12 +13,13 @@ const (
 type agentWorkspace struct {
 	header     *sessionPanel
 	transcript *transcriptView
-	composer   *widgets.TextArea
+	composer   *messageComposer
 	session    llm.Usage
 	last       llm.Usage
 	spinner    int
 	details    bool
 	navigation *sessionPanel
+	mentions   *fileMention
 }
 
 type workspaceAction struct {
@@ -41,15 +40,12 @@ func newAgentWorkspace() *agentWorkspace {
 	transcript := newTranscriptView()
 	transcript.Border = true
 	transcript.Title = "Conversation and live activity"
-	composer := widgets.NewTextArea()
-	composer.Border = true
-	composer.Title = "Message"
+	composer := newMessageComposer()
 	composer.Text = ""
-	composer.CursorStyle = focusedStyle()
 	navigation := newSessionPanel()
 	navigation.Border = true
 	navigation.Title = "Navigate"
-	return &agentWorkspace{header: header, transcript: transcript, composer: composer, navigation: navigation}
+	return &agentWorkspace{header: header, transcript: transcript, composer: composer, navigation: navigation, mentions: newFileMention()}
 }
 
 func (workspace *agentWorkspace) Tick() {

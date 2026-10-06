@@ -100,6 +100,18 @@ Switching views during an instruction cancels that instruction and waits for it 
 
 The model picker supports substring search: press `/`, type to filter, Enter to return to results, then use Up/Down and Enter to select. Escape clears an active query before leaving the picker. The workspace components live in `internal/tui/workspace_layout.go`, `workspace_panel.go`, `workspace_status.go`, `workspace_input.go`, `workspace_navigation.go`, `transcript.go`, and `model_picker.go`. Catalog retrieval belongs to `internal/llm/factory/models.go`.
 
+### Recent enhancements
+
+**Model catalog discovery** — The model picker now retrieves available models from the provider's catalog API with bounded pagination and response size limits. Press **Ctrl+R** to refresh the catalog. When discovery fails or is unsupported (including ChatGPT), you can enter a custom model ID.
+
+**File mentions** — Type `@` in the message composer to reference project files. The autocomplete lists files and directories relative to the current path, filtered by substring match. Selections are bounded to 500 entries to keep the UI responsive.
+
+**Enhanced message composer** — The input area now wraps long lines visually and scrolls vertically to keep the cursor visible. Multi-line drafts are easier to edit without losing your place.
+
+**Adaptive workspace layout** — Wide terminals (≥110 columns) show a session rail on the right with provider, model, status, token usage, and context information. Narrow terminals use a stacked layout with status at the top.
+
+**Session panel** — The right-side panel displays real-time agent status, session token counts (input/output/total), context window information, and workspace path. Token counts update as each model request completes.
+
 ## Saved configuration
 
 Profiles are stored in `config.yaml` under the operating system's user configuration directory, in a `projemble` subdirectory. Typical locations are:

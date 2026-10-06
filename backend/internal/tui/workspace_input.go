@@ -8,6 +8,23 @@ import (
 )
 
 func (workspace *agentWorkspace) Handle(event ui.Event, busy bool) workspaceAction {
+	if workspace.mentions.visible {
+		switch event.ID {
+		case "<Escape>":
+			workspace.mentions.dismiss(workspace.composer)
+			return workspaceAction{}
+		case "<Up>":
+			workspace.mentions.list.ScrollUp()
+			return workspaceAction{}
+		case "<Down>":
+			workspace.mentions.list.ScrollDown()
+			return workspaceAction{}
+		case "<Enter>", "<Tab>":
+			if workspace.mentions.choose(workspace.composer) {
+				return workspaceAction{}
+			}
+		}
+	}
 	switch event.ID {
 	case "<F2>", "<Escape>":
 		return workspaceAction{back: true}
