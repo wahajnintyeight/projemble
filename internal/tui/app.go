@@ -406,6 +406,11 @@ func runWithInitializer(initialize func() error) error {
 			validationMessage = ""
 			continue
 		}
+		if event.ID == "<C-l>" {
+			refreshTerminalView()
+			lastPage = page(-1)
+			continue
+		}
 		if currentPage == apiKeyPage || currentPage == aiModelPage || currentPage == projectNamePage || currentPage == projectDescriptionPage || currentPage == projectLocationPage || currentPage == repairPathPage {
 			if currentPage == aiModelPage {
 				var consumed bool

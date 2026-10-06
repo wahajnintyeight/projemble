@@ -42,9 +42,9 @@ func (w *agentWorkspace) Render(width, height int, rows []string, options genera
 	w.transcript.SetRect(0, top, leftWidth, transcriptBottom)
 	w.transcript.content(rows, w.details, follow)
 	w.composer.SetRect(0, composerTop, leftWidth, height)
-	w.composer.TitleBottom = "Enter send · F2 projects · F3 provider · F4 model · Ctrl+B panel"
+	w.composer.TitleBottom = "Enter send · F2 projects · F3 provider · F4 model · Ctrl+B panel · Ctrl+L redraw"
 	if running {
-		w.composer.TitleBottom = fmt.Sprintf("%c Working · queued %d/%d · Enter queue · Ctrl+B panel", agentSpinnerFrames[w.spinner%len(agentSpinnerFrames)], queued, maxPendingPrompts)
+		w.composer.TitleBottom = fmt.Sprintf("%c Working · queued %d/%d · Enter queue · Ctrl+B panel · Ctrl+L redraw", agentSpinnerFrames[w.spinner%len(agentSpinnerFrames)], queued, maxPendingPrompts)
 	}
 	w.composer.ShowCursor = true
 	if !w.showSidebar {

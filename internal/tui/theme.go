@@ -55,6 +55,9 @@ func styleError(message string) string {
 }
 
 func setFooter(block *ui.Block, text string, isError bool) {
+	if !isError {
+		text += " · Ctrl+L redraw"
+	}
 	block.TitleBottom = text
 	block.TitleBottomStyle = ui.Theme.Block.Title
 	if isError {

@@ -74,7 +74,7 @@ go run ./cmd/projemble project agent \
 
 Supported providers: OpenAI, Claude, DeepSeek, Mistral, Qwen, OpenRouter, Hugging Face, Gemini, and ChatGPT sign-in (`openai-web`). The agent can inspect and edit project files and run fixed Go checks (`go test`, `go vet`, and `go build`).
 
-In the agent workspace, press `Enter` to send, `Ctrl+J` for a new line, `Ctrl+B` to show or hide the session panel, `F3` to change provider, `F4` to change model, and `PageUp`/`PageDown` to review the conversation.
+In the agent workspace, press `Enter` to send, `Ctrl+J` for a new line, `Ctrl+B` to show or hide the session panel, `Ctrl+L` to redraw a broken or misaligned view, `F3` to change provider, `F4` to change model, and `PageUp`/`PageDown` to review the conversation. The `Ctrl+L` refresh is also available during onboarding.
 
 ## CLI commands
 

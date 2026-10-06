@@ -6,6 +6,13 @@ import (
 	"projemble/internal/catalog"
 )
 
+func refreshTerminalView() {
+	if screen := ui.DefaultBackend.Screen; screen != nil {
+		screen.Sync()
+	}
+	ui.Clear()
+}
+
 // Onboarding keeps the project blueprint visible before optional agent setup.
 // Hallmark critique: philosophy 5, hierarchy 4, execution 4, specificity 5, restraint 5, variety 4.
 func onboardingBanner(title, text string, width, height int) *sessionPanel {
