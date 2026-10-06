@@ -57,7 +57,8 @@ func (reporter generationReporter) Write(data []byte) (int, error) {
 	if len(data) > maxActivityOutput {
 		data = data[:maxActivityOutput]
 	}
-	if strings.HasPrefix(strings.TrimLeft(string(data), " \t\r\n"), "Agent summary:") {
+	messageStart := strings.TrimLeft(string(data), " \t\r\n")
+	if strings.HasPrefix(messageStart, "Agent summary:") || strings.HasPrefix(messageStart, "You:") {
 		message := cleanAssistantMarkdown(string(data))
 		if reporter.secret != "" {
 			message = strings.ReplaceAll(message, reporter.secret, "[REDACTED]")
@@ -94,6 +95,14 @@ func (reporter generationReporter) Write(data []byte) (int, error) {
 }
 
 func appendActivity(rows []string, line string) []string {
+	if strings.HasPrefix(strings.TrimSpace(line), "You:") {
+		rows = appendTranscriptRow(rows, "")
+		rows = appendTranscriptRow(rows, styledMarkdown("YOU", "fg:"+colorUser+",mod:bold"))
+		for _, part := range strings.Split(strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(line), "You:")), "\n") {
+			rows = appendTranscriptRow(rows, styledMarkdown(part, ""))
+		}
+		return appendTranscriptRow(rows, "")
+	}
 	if content, ok := assistantSummary(line); ok {
 		return appendAssistantMarkdown(rows, content)
 	}

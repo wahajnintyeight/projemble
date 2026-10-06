@@ -293,9 +293,6 @@ func runWithInitializer(initialize func() error) error {
 			}
 			if update.activity != "" {
 				generationRows = appendActivity(generationRows, update.activity)
-				if followAgentActivity {
-					workspace.transcript.SelectedRow = len(generationRows) - 1
-				}
 				continue
 			}
 			if update.done {
@@ -340,9 +337,6 @@ func runWithInitializer(initialize func() error) error {
 					} else {
 						generationRows = appendActivity(generationRows, "Ready for your next instruction.")
 					}
-				}
-				if followAgentActivity {
-					workspace.transcript.SelectedRow = len(generationRows) - 1
 				}
 				if quitAfterGeneration {
 					return nil
@@ -536,13 +530,13 @@ func runWithInitializer(initialize func() error) error {
 						continue
 					}
 					pendingPrompts = append(pendingPrompts, action.prompt)
-					generationRows = appendActivity(generationRows, "You (queued): "+action.prompt)
+					generationRows = appendActivity(generationRows, fmt.Sprintf("Instruction queued (%d).", len(pendingPrompts)))
 				} else {
 					if agentSession == nil {
 						generationRows = appendActivity(generationRows, "Wait for the starter generation to finish before sending a prompt.")
 						continue
 					}
-					generationRows = appendActivity(generationRows, "You: "+action.prompt)
+
 					startAgentTurn(action.prompt)
 				}
 				followAgentActivity = true

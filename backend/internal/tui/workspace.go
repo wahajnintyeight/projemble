@@ -13,18 +13,19 @@ import (
 )
 
 const (
-	maxPromptRunes    = 32 << 10
-	maxPendingPrompts = 32
+	maxPromptRunes     = 32 << 10
+	maxPendingPrompts  = 32
 	agentSpinnerFrames = "|/-\\"
 )
 
 type agentWorkspace struct {
 	header     *widgets.Paragraph
-	transcript *widgets.List
+	transcript *transcriptView
 	composer   *widgets.TextArea
 	session    llm.Usage
 	last       llm.Usage
 	spinner    int
+	details    bool
 }
 
 type workspaceAction struct {
@@ -40,11 +41,9 @@ func newAgentWorkspace() *agentWorkspace {
 	header := widgets.NewParagraph()
 	header.Border = true
 	header.Title = "Projemble agent"
-	transcript := widgets.NewList()
+	transcript := newTranscriptView()
 	transcript.Border = true
-	transcript.WrapText = true
 	transcript.Title = "Conversation and live activity"
-	transcript.SelectedStyle = transcript.TextStyle
 	composer := widgets.NewTextArea()
 	composer.Border = true
 	composer.Title = "Message"
@@ -58,25 +57,20 @@ func (workspace *agentWorkspace) Render(width, height int, rows []string, option
 	workspace.header.Title = fmt.Sprintf("Projemble agent  ·  %s  ·  %s", provider, options.Model)
 	workspace.header.Text = workspace.statusText(path, running, queued)
 
-	workspace.transcript.Rows = append([]string(nil), rows...)
-	workspace.transcript.SelectedStyle = focusedStyle()
-	if follow && len(rows) > 0 {
-		workspace.transcript.SelectedRow = len(rows) - 1
-	}
-
-	composerHeight := min(6, max(4, height/4))
+	composerHeight := min(6, max(4, strings.Count(workspace.composer.Text, "\n")+3))
 	if height < 12 {
 		composerHeight = max(3, height/3)
 	}
-	headerHeight := min(6, max(height/5, 3))
+	headerHeight := min(6, max(height/3, 3))
 	logBottom := max(headerHeight, height-composerHeight)
 	workspace.header.SetRect(0, 0, width, headerHeight)
 	workspace.transcript.SetRect(0, headerHeight, width, logBottom)
+	workspace.transcript.content(rows, workspace.details, follow)
 	workspace.composer.SetRect(0, logBottom, width, height)
 	if running {
-		workspace.composer.TitleBottom = fmt.Sprintf("%c Working · queued %d/%d · type + Enter to queue next · PageUp/PageDown review · Ctrl+C cancel and exit", agentSpinnerFrames[workspace.spinner%len(agentSpinnerFrames)], queued, maxPendingPrompts)
+		workspace.composer.TitleBottom = fmt.Sprintf("%c Working · queued %d/%d · Enter queue · PgUp/PgDn review · Ctrl+C exit", agentSpinnerFrames[workspace.spinner%len(agentSpinnerFrames)], queued, maxPendingPrompts)
 	} else {
-		workspace.composer.TitleBottom = "Enter send  ·  Ctrl+J new line  ·  PageUp/PageDown review  ·  Esc project details  ·  Ctrl+C exit"
+		workspace.composer.TitleBottom = "Enter send · Ctrl+J newline · PgUp/PgDn review · Esc back · Ctrl+C exit"
 	}
 	workspace.composer.ShowCursor = true
 	ui.Render(workspace.header, workspace.transcript, workspace.composer)
@@ -104,6 +98,9 @@ func (workspace *agentWorkspace) AddUsage(usage llm.Usage) {
 
 func (workspace *agentWorkspace) Handle(event ui.Event, busy bool) workspaceAction {
 	switch event.ID {
+	case "<C-o>":
+		workspace.details = !workspace.details
+		return workspaceAction{}
 	case "<C-c>":
 		return workspaceAction{quit: true}
 	case "<Escape>":
@@ -115,7 +112,7 @@ func (workspace *agentWorkspace) Handle(event ui.Event, busy bool) workspaceActi
 		return workspaceAction{scroll: true}
 	case "<PageDown>":
 		workspace.transcript.ScrollPageDown()
-		return workspaceAction{scroll: true, follow: workspace.transcript.SelectedRow == len(workspace.transcript.Rows)-1}
+		return workspaceAction{scroll: true, follow: workspace.transcript.AtBottom()}
 	}
 	switch event.ID {
 	case "<Enter>":

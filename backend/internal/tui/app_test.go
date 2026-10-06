@@ -271,6 +271,14 @@ func TestAgentWorkspaceShowsModelTokenUsageAndPromptInput(t *testing.T) {
 	if !strings.Contains(workspace.header.Title, "Mistral") || !strings.Contains(workspace.header.Title, "mistral-test-model") {
 		t.Fatalf("selected provider/model missing from header: %q", workspace.header.Title)
 	}
+	if !strings.Contains(workspace.header.Text, "Agent is thinking") {
+		t.Fatalf("working status missing from header: %q", workspace.header.Text)
+	}
+	frame := workspace.header.Text
+	workspace.Tick()
+	if workspace.statusText(".", true, 2) == frame {
+		t.Fatal("agent spinner did not advance")
+	}
 	if !workspace.composer.ShowCursor || !strings.Contains(workspace.composer.TitleBottom, "queued 2/") {
 		t.Fatalf("busy composer should accept and show queued prompts: cursor=%v footer=%q", workspace.composer.ShowCursor, workspace.composer.TitleBottom)
 	}
