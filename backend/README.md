@@ -1,69 +1,103 @@
-# Projemble
+# Projemble Backend
 
-Projemble is a local-first Go project creator. The first slice is a TUI for selecting an application shape and an architecture profile.
+Projemble is a local-first Go project profile manager. Its terminal wizard collects a project name, description, parent directory, application shape, and architecture, then creates the project directory and saves the profile in a local YAML file.
 
-## Initial catalogue
+> [!NOTE]
+> The current version creates the directory and registers its profile. It does not generate application source files yet.
 
-Application shape and architecture are separate choices:
+## Supported profiles
 
-- **Monolith**: one deployable Go application.
-- **Microservices**: multiple Go services using [go-micro](https://github.com/micro/go-micro) for service communication and runtime conventions.
+The catalog combines two application shapes with three architecture choices:
 
-The three architecture profiles are:
-
-- **Layered**: a pragmatic handler/service/repository separation for small teams and straightforward domains.
-- **Clean / Hexagonal**: domain and use cases at the center, with infrastructure behind ports and adapters.
-- **Domain-Driven Design**: organize around bounded contexts and explicit domain models when the business domain warrants it.
-
-These profiles can be selected with either app shape. For microservices, the profile describes the internal structure of each service; go-micro describes how services communicate and run. DDD is an option for complex domains, not the default for every project.
+| Shape | Architecture | Template ID |
+| --- | --- | --- |
+| Monolith | Layered | `go-monolith-layered` |
+| Monolith | Clean / Hexagonal | `go-monolith-clean-hexagonal` |
+| Monolith | Domain-Driven Design | `go-monolith-ddd` |
+| Microservices (go-micro) | Layered | `go-microservices-layered` |
+| Microservices (go-micro) | Clean / Hexagonal | `go-microservices-clean-hexagonal` |
+| Microservices (go-micro) | Domain-Driven Design | `go-microservices-ddd` |
 
 ## Requirements
 
 - Go 1.25 or later
-- A terminal that supports interactive keyboard input
-- A YAML config library dependency, fetched by Go modules
+- A terminal with interactive keyboard input
 
-## Run
+## Run the wizard
+
+From this directory, run:
 
 ```sh
 go run ./cmd/projemble
 ```
 
-The TUI guides you through these steps:
+The wizard asks for:
 
-1. Enter the project name.
-2. Add a short description.
-3. Enter an existing absolute parent directory for the project.
-4. Choose the application shape: monolith or microservices (go-micro).
-5. Choose an architecture: Layered, Clean / Hexagonal, or Domain-Driven Design.
-6. Review the project details and save the profile to YAML. Projemble creates the project directory inside the chosen parent directory.
+1. Project name and short description
+2. An existing absolute parent directory
+3. Application shape and architecture
+4. Review and confirmation
 
-Enter a path using the host operating system's absolute-path format (for example, `E:\Softwares\Programming` on Windows or `/home/wahaj/projects` on Linux). The parent directory must already exist. Use Up/Down or `j`/`k` to choose an option and Enter to continue. On the review screen, use `n`, `d`, `p`, `s`, or `a` to edit the project name, description, location, application shape, or architecture directly. Backspace or `b` goes back one step; `q` or Ctrl+C quits. Saving creates the project directory and records its profile in YAML; source file generation and AI provider setup are later slices.
+The final project directory is created inside the selected parent directory using the project name. For example, entering `E:\Softwares\Programming` and the name `waypoint` creates `E:\Softwares\Programming\waypoint`.
 
-## Project configuration
+Use Up/Down or `j`/`k` to select an option and Enter to continue. On the review screen, `n`, `d`, `p`, `s`, and `a` edit the name, description, path, shape, and architecture. Press `b` or Backspace to go back, or `q` to quit.
 
-Projemble stores registered projects in `config.yaml` under the operating system's user config directory. On Windows this is normally `%AppData%\projemble\config.yaml`.
+Paths use the host operating system's format. The selected parent must already exist, and the destination project directory must not exist.
+
+## Manage profiles from the command line
+
+List saved profiles:
 
 ```sh
-go run ./cmd/projemble project add --name inventory-api --description "An inventory API" --path ./inventory-api --template go-monolith-clean-hexagonal --setting database=postgres
 go run ./cmd/projemble project list
 ```
 
-The YAML records the project path, selected template, stack, app shape, architecture, and additional settings. Do not put API keys or other secrets in project settings; credentials will use a separate local secret store.
+Register a profile directly:
+
+```sh
+go run ./cmd/projemble project add \
+  --name waypoint \
+  --description "A delivery coordination platform profile" \
+  --path ./waypoint \
+  --template go-microservices-clean-hexagonal \
+  --setting service-framework=go-micro
+```
+
+The `project add` command records the supplied path and profile; it does not create the directory. The interactive wizard creates the destination directory when the profile is saved.
+
+## Configuration
+
+Profiles are stored in `config.yaml` under the operating system's user configuration directory, in a `projemble` subdirectory. Typical locations are:
+
+- Windows: `%AppData%\projemble\config.yaml`
+- macOS: `~/Library/Application Support/projemble/config.yaml`
+- Linux: `$XDG_CONFIG_HOME/projemble/config.yaml`, or `~/.config/projemble/config.yaml` when `XDG_CONFIG_HOME` is unset
+
+Example:
 
 ```yaml
 version: 1
 projects:
   - id: 48a85f7c52c54b02a3241860931120fc
-    name: inventory-api
-    description: An inventory API
-    path: C:\Users\you\Projects\inventory-api
+    name: waypoint
+    description: A delivery coordination platform profile
+    path: E:\Softwares\Programming\waypoint
     stack: go
-    app_shape: monolith
+    app_shape: microservices
     architecture: clean-hexagonal
-    template: go-monolith-clean-hexagonal
+    template: go-microservices-clean-hexagonal
     settings:
-      database: postgres
+      service-framework: go-micro
     created_at: "2026-10-06T12:00:00Z"
     updated_at: "2026-10-06T12:00:00Z"
+```
+
+Do not store API keys or other secrets in project settings.
+
+## Verify
+
+```sh
+go test ./...
+go build ./...
+go vet ./...
 ```
