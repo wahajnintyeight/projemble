@@ -37,7 +37,7 @@ func handleTextInput(event ui.Event, currentPage page, nameInput, descriptionInp
 		case aiModelPage:
 			*nextPage = apiKeyPage
 		case projectNamePage:
-			*nextPage = generationModePage
+			*nextPage = homePage
 		case projectLocationPage:
 			*nextPage = projectDescriptionPage
 		case repairPathPage:
@@ -93,7 +93,7 @@ func handleTextInput(event ui.Event, currentPage page, nameInput, descriptionInp
 			}
 			active.Text = model
 			active.Cursor = utf8.RuneCountInString(model)
-			*nextPage = projectNamePage
+			*nextPage = summaryPage
 			return true, false, ""
 		}
 		if currentPage == repairPathPage {
@@ -259,8 +259,8 @@ type chatGPTAuthResult struct {
 
 func generationModeChoices() []catalogChoice {
 	return []catalogChoice{
-		{name: "Local templates", description: "Generate the selected starter directly. No account, API key, or network needed."},
-		{name: "AI-assisted generation", description: "Have your chosen AI provider build on the selected starter."},
+		{name: "Scaffold only", description: "Generate the selected template offline. No account or API key needed."},
+		{name: "Scaffold + agent", description: "Generate the same template, then let your agent implement features and run checks."},
 	}
 }
 
@@ -324,7 +324,7 @@ func updateSummary(list *widgets.List, name, description string, template catalo
 	} else if options.Mode == "agent" {
 		credentialNote = "Provider API key is saved in local YAML config."
 	}
-	list.Title = "Review project profile"
+	list.Title = "Your project blueprint / Ready to build"
 	list.Rows = []string{
 		styleLabel("Project name:") + "  " + name,
 		styleLabel("Description:") + "   " + description,
@@ -336,7 +336,7 @@ func updateSummary(list *widgets.List, name, description string, template catalo
 		styleLabel("Service setup:") + " " + frameworkLabel(template.ServiceFrameworkID),
 		styleLabel("Project path:") + "  " + projectPath,
 		"",
-		"This creates the starter project and saves its profile in local YAML.",
+		"Projemble generates this template and saves your project blueprint locally.",
 		credentialNote,
 		"",
 	}
@@ -355,10 +355,10 @@ func updateSummary(list *widgets.List, name, description string, template catalo
 
 func generationLabel(options generationOptions) string {
 	if options.Mode != "agent" {
-		return "Local templates"
+		return "Scaffold only"
 	}
 	choice, _ := providerAtIndex(options.Provider)
-	return fmt.Sprintf("AI-assisted · %s · %s", choice, options.Model)
+	return fmt.Sprintf("Scaffold + agent · %s · %s", choice, options.Model)
 }
 
 func initialGenerationOptions(config projectstore.Config) generationOptions {

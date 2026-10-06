@@ -76,10 +76,7 @@ func runWithInitializer(initialize func() error) error {
 	selectedShape := 0
 	selectedArchitecture := 0
 	providerConfig := initialGenerationOptions(config)
-	selectedMode := 0
-	if providerConfig.Mode == "agent" {
-		selectedMode = 1
-	}
+	selectedMode := generationModeIndex(providerConfig)
 	selectedProvider := providerIndex(providerConfig.Provider)
 	editingLocationFromSummary := false
 	validationMessage := ""
@@ -210,11 +207,11 @@ func runWithInitializer(initialize func() error) error {
 			if validationMessage != "" {
 				setFooter(&list.Block, validationMessage, true)
 			}
-			ui.Render(list)
+			renderProjectHome(list, "Select a saved project to continue, or create a new blueprint.", width, height)
 		case generationModePage:
-			updateChoiceList(list, "How should Projemble generate your starter?", generationModeChoices(), selectedMode, width, height)
+			updateChoiceList(list, "5 / Build your blueprint", generationModeChoices(), selectedMode, width, height)
 			setFooter(&list.Block, "Loaded default: "+generationLabel(providerConfig)+" | Up/Down or j/k  Select  Enter  Continue  q  Quit", false)
-			ui.Render(list)
+			renderOnboardingChoices(list, blueprintIntroduction(selectedShape, selectedArchitecture), width, height)
 		case providerPage:
 			updateChoiceList(list, "Choose an AI provider", providerChoices(), selectedProvider, width, height)
 			if authPending {
@@ -222,7 +219,7 @@ func runWithInitializer(initialize func() error) error {
 			} else if validationMessage != "" {
 				setFooter(&list.Block, validationMessage+" | Enter retry | Esc/b back", true)
 			}
-			ui.Render(list)
+			renderOnboardingChoices(list, "Agent / Provider connection\nChoose the provider that will implement features on your generated scaffold. Saved credentials can be reused across projects.", width, height)
 		case apiKeyPage:
 			setInputLayout(keyInput, width, height)
 			if validationMessage != "" {
@@ -230,7 +227,7 @@ func runWithInitializer(initialize func() error) error {
 			} else {
 				setFooter(&keyInput.Block, "Enter save | Esc or Ctrl+B back", false)
 			}
-			ui.Render(keyInput)
+			renderOnboardingInput(keyInput, currentPage, width, height)
 		case aiModelPage:
 			models.prepare(providerConfig)
 			models.render(modelInput, width, height, validationMessage)
@@ -241,7 +238,7 @@ func runWithInitializer(initialize func() error) error {
 			} else {
 				setFooter(&nameInput.Block, "Enter continue     Esc back", false)
 			}
-			ui.Render(nameInput)
+			renderOnboardingInput(nameInput, currentPage, width, height)
 		case projectDescriptionPage:
 			setInputLayout(descriptionInput, width, height)
 			if validationMessage != "" {
@@ -249,7 +246,7 @@ func runWithInitializer(initialize func() error) error {
 			} else {
 				setFooter(&descriptionInput.Block, "Enter continue     Esc back", false)
 			}
-			ui.Render(descriptionInput)
+			renderOnboardingInput(descriptionInput, currentPage, width, height)
 		case repairPathPage:
 			locationInput.Title = "Existing project directory"
 			locationInput.Placeholder = "Enter the current absolute project folder path"
@@ -269,13 +266,13 @@ func runWithInitializer(initialize func() error) error {
 			} else {
 				setFooter(&locationInput.Block, "Enter continue | project name is appended | Esc back", false)
 			}
-			ui.Render(locationInput)
+			renderOnboardingInput(locationInput, currentPage, width, height)
 		case appShapePage:
 			updateChoiceList(list, "Choose the application shape", appShapeChoices(), selectedShape, width, height)
-			ui.Render(list)
+			renderOnboardingChoices(list, shapeIntroduction(), width, height)
 		case architecturePage:
 			updateChoiceList(list, "Choose the architecture", architectureChoices(appShapeIDAt(selectedShape)), selectedArchitecture, width, height)
-			ui.Render(list)
+			renderOnboardingChoices(list, architectureIntroduction(selectedShape), width, height)
 		case summaryPage:
 			template, ok := templateForChoices(selectedShape, selectedArchitecture)
 			if !ok {
@@ -635,9 +632,12 @@ func runWithInitializer(initialize func() error) error {
 			if currentPage == homePage {
 				reopening = nil
 				providerConfig = initialGenerationOptions(config)
+				selectedMode = generationModeIndex(providerConfig)
 				nameInput.Text = ""
 				descriptionInput.Text = ""
-				currentPage = generationModePage
+				nameInput.Cursor, descriptionInput.Cursor = 0, 0
+				selectedProvider = providerIndex(providerConfig.Provider)
+				currentPage = projectNamePage
 				continue
 			}
 			if currentPage == summaryPage {
@@ -759,20 +759,29 @@ func runWithInitializer(initialize func() error) error {
 					validationMessage = "ChatGPT sign-in cancelled. Choose a provider or press Enter to retry."
 				} else {
 					currentPage = generationModePage
+					if editingSettings {
+						editingSettings = false
+						currentPage = homePage
+					}
 				}
 			case generationModePage:
-				return nil
+				currentPage = architecturePage
 			case architecturePage:
 				currentPage = appShapePage
 			case summaryPage:
-				currentPage = architecturePage
+				currentPage = generationModePage
 			}
 		case "<Enter>":
 			switch currentPage {
 			case homePage:
 				if list.SelectedRow == 0 {
 					reopening = nil
-					currentPage = generationModePage
+					providerConfig = initialGenerationOptions(config)
+					selectedMode = generationModeIndex(providerConfig)
+					nameInput.Text, descriptionInput.Text = "", ""
+					nameInput.Cursor, descriptionInput.Cursor = 0, 0
+					selectedProvider = providerIndex(providerConfig.Provider)
+					currentPage = projectNamePage
 					continue
 				}
 				index := list.SelectedRow - 1
@@ -846,14 +855,14 @@ func runWithInitializer(initialize func() error) error {
 				selectedMode = list.SelectedRow
 				if selectedMode == 0 {
 					providerConfig.Mode = "local"
-					currentPage = projectNamePage
+					currentPage = summaryPage
 				} else {
 					providerConfig.Mode = "agent"
 					if providerConfig.APIKey == "" {
 						providerConfig.APIKey = rememberedKey(providerConfig.Provider, config)
 					}
 					if providerConfig.APIKey != "" && providerConfig.Model != "" {
-						currentPage = projectNamePage
+						currentPage = summaryPage
 					} else {
 						currentPage = providerPage
 					}
@@ -908,7 +917,7 @@ func runWithInitializer(initialize func() error) error {
 					continue
 				}
 				projectPath = plannedPath
-				currentPage = summaryPage
+				currentPage = generationModePage
 			case summaryPage:
 				template, ok := templateForChoices(selectedShape, selectedArchitecture)
 				if !ok {
@@ -922,6 +931,7 @@ func runWithInitializer(initialize func() error) error {
 					updates := generationUpdates
 					generationRows = nil
 					generationRows = appendActivity(generationRows, "Preparing project: "+nameInput.Text)
+					generationRows = appendActivity(generationRows, "Blueprint: "+template.Name)
 					generationRows = appendActivity(generationRows, "Provider: "+generationLabel(providerConfig))
 					generationRows = appendActivity(generationRows, "Workspace: "+projectPath)
 					followAgentActivity = true

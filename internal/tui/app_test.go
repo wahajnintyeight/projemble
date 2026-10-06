@@ -107,7 +107,7 @@ func TestAISetupRequiresMaskedKeyAndModel(t *testing.T) {
 	}
 	modelInput.Text = "test-model"
 	advance, quit, message = handleTextInput(ui.Event{ID: "<Enter>"}, aiModelPage, widgets.NewInput(), widgets.NewInput(), widgets.NewInput(), keyInput, modelInput, &next)
-	if !advance || quit || message != "" || next != projectNamePage {
+	if !advance || quit || message != "" || next != summaryPage {
 		t.Fatalf("model step: advance=%v quit=%v message=%q next=%v", advance, quit, message, next)
 	}
 }
@@ -336,7 +336,7 @@ func TestReviewShowsGenerationChoiceWithoutShowingAPIKey(t *testing.T) {
 	options := generationOptions{Mode: "agent", Provider: "openai", Model: "gpt-test", APIKey: "secret-provider-key"}
 	updateSummary(list, "sample", "description", template, filepath.Join(t.TempDir(), "sample"), options, "Enter generate project", "", 100, 35)
 	rows := strings.Join(list.Rows, "\n")
-	if !strings.Contains(rows, "AI-assisted · OpenAI · gpt-test") {
+	if !strings.Contains(rows, "Scaffold + agent · OpenAI · gpt-test") {
 		t.Fatalf("generation details missing from review:\n%s", rows)
 	}
 	if strings.Contains(rows, options.APIKey) {

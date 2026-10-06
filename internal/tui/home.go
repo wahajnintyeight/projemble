@@ -7,18 +7,20 @@ import (
 
 	"projemble/internal/agent"
 	"projemble/internal/auth"
+	"projemble/internal/catalog"
 	"projemble/internal/llm"
 	"projemble/internal/projectstore"
 )
 
 func homeChoices(config projectstore.Config) []catalogChoice {
-	rows := []catalogChoice{{name: "New project", description: "Create from a template or with your agent"}}
+	rows := []catalogChoice{{name: "Create a project", description: "Define your idea, choose a blueprint, and generate its scaffold"}}
 	for _, project := range config.Projects {
 		status := project.Status
 		if status == "" {
 			status = "saved"
 		}
-		rows = append(rows, catalogChoice{name: project.Name, description: fmt.Sprintf("%s | %s | %s", status, project.AIModel, project.Path)})
+		template, _ := catalog.TemplateByID(project.TemplateID)
+		rows = append(rows, catalogChoice{name: project.Name, description: fmt.Sprintf("%s | %s | %s", template.Name, status, project.Path)})
 	}
 	return rows
 }
