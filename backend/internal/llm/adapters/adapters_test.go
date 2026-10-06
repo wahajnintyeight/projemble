@@ -33,7 +33,7 @@ func TestOpenAICompatibleMapsMessagesAndTools(t *testing.T) {
 			t.Errorf("request mapping = %+v", request)
 		}
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = fmt.Fprint(w, `{"choices":[{"message":{"role":"assistant","tool_calls":[{"id":"call-1","type":"function","function":{"name":"write_file","arguments":"{\"path\":\"a.txt\"}"}}]}}]}`)
+		_, _ = fmt.Fprint(w, `{"choices":[{"message":{"role":"assistant","tool_calls":[{"id":"call-1","type":"function","function":{"name":"write_file","arguments":"{\"path\":\"a.txt\"}"}}]}}],"usage":{"prompt_tokens":11,"completion_tokens":7,"total_tokens":18,"prompt_tokens_details":{"cached_tokens":3}}}`)
 	}))
 	defer server.Close()
 	provider := NewOpenAICompatible(llm.Config{Provider: llm.OpenAI, Model: "model-x", APIKey: "test-key", BaseURL: server.URL + "/v1", Client: server.Client()})
@@ -43,6 +43,9 @@ func TestOpenAICompatibleMapsMessagesAndTools(t *testing.T) {
 	}
 	if len(response.Message.ToolCalls) != 1 || response.Message.ToolCalls[0].Name != "write_file" {
 		t.Fatalf("tool calls = %+v", response.Message.ToolCalls)
+	}
+	if !response.Usage.Available || response.Usage.InputTokens != 11 || response.Usage.OutputTokens != 7 || response.Usage.TotalTokens != 18 || response.Usage.CachedInputTokens != 3 {
+		t.Fatalf("token usage = %+v", response.Usage)
 	}
 }
 
@@ -62,7 +65,7 @@ func TestAnthropicMapsToolUse(t *testing.T) {
 		if request.System != "system prompt" || request.MaxTokens == 0 {
 			t.Errorf("request mapping = %+v", request)
 		}
-		_, _ = fmt.Fprint(w, `{"content":[{"type":"tool_use","id":"tool-1","name":"list_files","input":{"path":"."}}]}`)
+		_, _ = fmt.Fprint(w, `{"content":[{"type":"tool_use","id":"tool-1","name":"list_files","input":{"path":"."}}],"usage":{"input_tokens":12,"output_tokens":5,"cache_read_input_tokens":3,"cache_creation_input_tokens":1}}`)
 	}))
 	defer server.Close()
 	provider := NewAnthropic(llm.Config{Provider: llm.Claude, Model: "claude-model", APIKey: "anthropic-key", BaseURL: server.URL + "/v1", Client: server.Client()})
@@ -73,6 +76,9 @@ func TestAnthropicMapsToolUse(t *testing.T) {
 	if len(response.Message.ToolCalls) != 1 || response.Message.ToolCalls[0].ID != "tool-1" {
 		t.Fatalf("tool calls = %+v", response.Message.ToolCalls)
 	}
+	if !response.Usage.Available || response.Usage.InputTokens != 16 || response.Usage.OutputTokens != 5 || response.Usage.TotalTokens != 21 || response.Usage.CachedInputTokens != 4 {
+		t.Fatalf("token usage = %+v", response.Usage)
+	}
 }
 
 func TestGeminiMapsFunctionCall(t *testing.T) {
@@ -80,7 +86,7 @@ func TestGeminiMapsFunctionCall(t *testing.T) {
 		if r.URL.Path != "/v1beta/models/gemini-test:generateContent" || r.Header.Get("x-goog-api-key") != "gemini-key" {
 			t.Errorf("path/header = %s %q", r.URL.Path, r.Header.Get("x-goog-api-key"))
 		}
-		_, _ = fmt.Fprint(w, `{"candidates":[{"content":{"parts":[{"functionCall":{"name":"read_file","id":"fc-1","args":{"path":"main.go"}}}]}}]}`)
+		_, _ = fmt.Fprint(w, `{"candidates":[{"content":{"parts":[{"functionCall":{"name":"read_file","id":"fc-1","args":{"path":"main.go"}}}]}}],"usageMetadata":{"promptTokenCount":13,"candidatesTokenCount":6,"totalTokenCount":21,"cachedContentTokenCount":2}}`)
 	}))
 	defer server.Close()
 	provider := NewGemini(llm.Config{Provider: llm.Gemini, Model: "gemini-test", APIKey: "gemini-key", BaseURL: server.URL + "/v1beta", Client: server.Client()})
@@ -90,6 +96,9 @@ func TestGeminiMapsFunctionCall(t *testing.T) {
 	}
 	if len(response.Message.ToolCalls) != 1 || !strings.Contains(response.Message.ToolCalls[0].Arguments, "main.go") {
 		t.Fatalf("tool calls = %+v", response.Message.ToolCalls)
+	}
+	if !response.Usage.Available || response.Usage.InputTokens != 13 || response.Usage.OutputTokens != 6 || response.Usage.TotalTokens != 21 || response.Usage.CachedInputTokens != 2 {
+		t.Fatalf("token usage = %+v", response.Usage)
 	}
 }
 
@@ -111,6 +120,7 @@ func TestOpenAIResponsesUsesOAuthAndAssemblesStreamedToolArguments(t *testing.T)
 			{"type": "response.output_item.added", "item": map[string]any{"type": "function_call", "id": "fc_1", "call_id": "call_1", "name": "write_file", "arguments": ""}},
 			{"type": "response.function_call_arguments.delta", "item_id": "fc_1", "delta": `{"path":"`},
 			{"type": "response.function_call_arguments.delta", "item_id": "fc_1", "delta": `a.txt"}`},
+			{"type": "response.completed", "response": map[string]any{"usage": map[string]any{"input_tokens": 14, "output_tokens": 8, "total_tokens": 22, "input_tokens_details": map[string]any{"cached_tokens": 4}}}},
 		}
 		for _, event := range events {
 			data, _ := json.Marshal(event)
@@ -125,6 +135,9 @@ func TestOpenAIResponsesUsesOAuthAndAssemblesStreamedToolArguments(t *testing.T)
 	}
 	if len(response.Message.ToolCalls) != 1 || response.Message.ToolCalls[0].ID != "call_1" || response.Message.ToolCalls[0].Arguments != `{"path":"a.txt"}` {
 		t.Fatalf("streamed tool call = %+v", response.Message.ToolCalls)
+	}
+	if !response.Usage.Available || response.Usage.InputTokens != 14 || response.Usage.OutputTokens != 8 || response.Usage.TotalTokens != 22 || response.Usage.CachedInputTokens != 4 {
+		t.Fatalf("token usage = %+v", response.Usage)
 	}
 }
 

@@ -33,9 +33,9 @@ go run ./cmd/projemble
 The wizard starts by asking how to generate the starter:
 
 1. Choose **Local templates** for deterministic, offline generation, or **AI-assisted generation** to build on that starter with an LLM.
-2. For AI generation, choose a provider, enter its API key (masked; a matching environment variable is prefilled when available), and enter a model ID. You can also choose ChatGPT plan sign-in, which opens the browser and needs no API key.
+2. For AI generation, choose a provider, enter its API key (masked and saved to local YAML; the provider environment variable is used when no saved key exists), and enter a model ID. ChatGPT plan sign-in is available to eligible Plus or Pro accounts. Free ChatGPT accounts can use local generation or AI generation with their own OpenAI Platform API key (billed separately) or another provider. While browser sign-in is pending, press `Esc` or `b` in the terminal to cancel; closing the browser tab alone does not send a cancellation callback.
 3. Enter the project name, description, and parent directory, then choose the application shape and architecture.
-4. Review the profile and start generation. Projemble creates the selected starter, optionally runs the agent, and saves the profile.
+4. Review the profile and start generation. Projemble creates the selected starter, optionally runs the agent, and saves the profile. AI-assisted runs open a live agent workspace with the selected model, file/tool activity, provider-reported input/output token counts, and a multiline prompt for follow-up changes. Press Enter to send a prompt, Ctrl+J for a new line, PageUp/PageDown to review activity, `b` for project details, or `q` to exit.
 
 The final project directory is created inside the selected parent directory using the project name. For example, entering `E:\Softwares\Programming` and the name `waypoint` creates `E:\Softwares\Programming\waypoint`.
 
@@ -82,9 +82,9 @@ go run ./cmd/projemble auth login --provider openai-web
 go run ./cmd/projemble project agent --provider openai-web --path "$HOME/waypoint" --model "your-model" --task "Review the starter and suggest improvements."
 ```
 
-The ChatGPT sign-in uses OpenAI's documented public-client loopback OAuth flow with PKCE and verified OIDC identity tokens. Tokens are stored under the operating system's Projemble user configuration directory with `0600` permissions on Unix systems and refreshed as needed. OpenAI's ChatGPT-plan inference route is a separate Responses API integration; it requires streamed requests with `store:false` and supports a narrower set of capabilities than API-key access. ChatGPT plan use depends on OpenAI account eligibility and granted `chatgpt.tokens.use.direct` permission; an API key uses separate Platform billing. See [OpenAI sign-in requirements](https://developers.openai.com/siwc/token-sharing-open-source/sign-in) and [current preview limitations](https://developers.openai.com/siwc/token-sharing-open-source/preview-limitations). Provider IDs and model IDs are saved with the project profile. API keys are used only for the current generation and are never saved in project YAML.
+The ChatGPT sign-in uses OpenAI's documented public-client loopback OAuth flow with PKCE and verified OIDC identity tokens. Tokens are stored under the operating system's Projemble user configuration directory with `0600` permissions on Unix systems and refreshed as needed. OpenAI's ChatGPT-plan inference route is a separate Responses API integration; it requires streamed requests with `store:false` and supports a narrower set of capabilities than API-key access. Plan inference is for eligible Plus or Pro accounts with the granted `chatgpt.tokens.use.direct` permission; a free ChatGPT account can use Projemble's local templates or configure a provider API key, which uses separate Platform billing. The workspace restriction shown during sign-in is independent of subscription status; a ChatGPT client registration is bound to the workspace selected during registration. See [OpenAI sign-in requirements](https://developers.openai.com/siwc/token-sharing-open-source/sign-in), [account and workspace behavior](https://developers.openai.com/siwc/token-sharing-open-source), and [current preview limitations](https://developers.openai.com/siwc/token-sharing-open-source/preview-limitations). Provider IDs and model IDs are saved with the project profile. API keys entered in the TUI are saved in `provider_keys` in `config.yaml`; environment variables are used when no YAML key is saved. The YAML file contains plaintext secrets and must be kept private.
 
-The provider-neutral agent delegates through an LLM interface, with a factory selecting adapters for OpenAI-compatible APIs, Anthropic Messages, Gemini generateContent, and OpenAI Responses streaming. Its built-in engineering guidance covers repository inspection, minimal changes, safe file boundaries, tests, and truthful reporting. Tools are constrained to project-relative file listing/reading/writing and the fixed Go checks `test`, `build`, and `vet`; it cannot run arbitrary shell commands.
+The provider-neutral agent delegates through an LLM interface, with a factory selecting adapters for OpenAI-compatible APIs, Anthropic Messages, Gemini generateContent, and OpenAI Responses streaming. Its built-in engineering guidance covers repository inspection, minimal changes, safe file boundaries, tests, and truthful reporting. Tools are constrained to project-relative file listing/reading/writing and the fixed Go checks `test`, `build`, and `vet`; it cannot run arbitrary shell commands. Token counts come from provider responses and update as each model request completes. The workspace shows the latest request's input tokens and labels the model's maximum context size unavailable when the provider API does not report it.
 
 ## Configuration
 
@@ -94,7 +94,7 @@ Profiles are stored in `config.yaml` under the operating system's user configura
 - macOS: `~/Library/Application Support/projemble/config.yaml`
 - Linux: `$XDG_CONFIG_HOME/projemble/config.yaml`, or `~/.config/projemble/config.yaml` when `XDG_CONFIG_HOME` is unset
 
-The top-level `generation` settings store the last successful generation mode, provider, and model. Older config files without these defaults use the most recently updated project profile. Provider API keys are never written to this file; they are read from the provider's environment variable or entered for that run.
+The top-level `generation` settings store the selected generation mode, provider, and model. `parent_directory` and `last_project_id` remember the creation location and selected project. Older config files without these defaults use the most recently updated project profile. Provider API keys are stored in the `provider_keys` map in this file. They are plaintext; keep the config file private and do not commit or share it. The TUI and `project agent` command load these keys automatically when the matching environment variable is unset.
 
 Example:
 
@@ -128,3 +128,13 @@ go test ./...
 go build ./...
 go vet ./...
 ```
+
+### Reopening projects and conversations
+
+Startup shows saved projects. Select a project and press Enter to reopen it; use `n` for a new project or `r` for provider settings. Reopening an AI project restores its conversation, recent activity, and recorded token usage. Missing credentials lead to provider setup without repeating project naming or directory selection.
+
+Agent checkpoints are stored in the `sessions` subdirectory alongside the user config, one per workspace. Checkpoints are atomic and limited to 16 MiB. They contain conversation and tool content, but not the configured provider key. Old conversations created before checkpoint support cannot be recovered. Multiple named sessions, persisted drafts, and cross-process concurrent access are not implemented yet.
+
+An AI failure preserves the starter files and an interrupted project profile. Reopen the project and give the agent an instruction to continue. No paid request is automatically restarted at launch. Linux systems without Secret Service can supply provider environment variables.
+
+See [agent workspace research and proposed UX](docs/agent-workspace-research.md).

@@ -81,6 +81,13 @@ func runAgent(args []string, stdout, stderr io.Writer) error {
 	if *keyEnv != "" {
 		key = os.Getenv(*keyEnv)
 	}
+	if key == "" && provider != llm.OpenAIWeb {
+		saved, err := projectstore.LoadDefault()
+		if err != nil {
+			return fmt.Errorf("load saved provider key: %w", err)
+		}
+		key = saved.ProviderKeys[string(provider)]
+	}
 	config := agent.Config{ProviderID: provider, BaseURL: *baseURL, Model: *model, APIKey: key, SecretEnvName: *keyEnv}
 	if provider == llm.OpenAIWeb {
 		config.Credentials = &auth.ChatGPTTokenSource{}

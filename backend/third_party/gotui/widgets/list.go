@@ -67,9 +67,7 @@ func (l *List) getRowCells(row int) []ui.Cell {
 		cells = ui.ParseStyles(l.Rows[row], l.TextStyle)
 		if row == l.SelectedRow {
 			for i := 0; i < len(cells); i++ {
-				if cells[i].Style.Fg == l.TextStyle.Fg && cells[i].Style.Bg == l.TextStyle.Bg {
-					cells[i].Style = l.SelectedStyle
-				}
+				cells[i].Style = l.SelectedStyle
 			}
 		}
 	}

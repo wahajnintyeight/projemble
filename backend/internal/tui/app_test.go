@@ -1,6 +1,8 @@
 package tui
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -11,6 +13,7 @@ import (
 	"github.com/metaspartan/gotui/v5/widgets"
 
 	"projemble/internal/catalog"
+	"projemble/internal/llm"
 	"projemble/internal/projectstore"
 )
 
@@ -109,6 +112,33 @@ func TestAISetupRequiresMaskedKeyAndModel(t *testing.T) {
 	}
 }
 
+func TestRepairPathInputRequiresExistingAbsoluteDirectory(t *testing.T) {
+	input := widgets.NewInput()
+	input.Text = "relative"
+	var next page
+	advance, _, message := handleTextInput(ui.Event{ID: "<Enter>"}, repairPathPage, widgets.NewInput(), widgets.NewInput(), input, widgets.NewInput(), widgets.NewInput(), &next)
+	if advance || message == "" {
+		t.Fatal("relative path unexpectedly accepted")
+	}
+	input.Text = t.TempDir()
+	advance, _, message = handleTextInput(ui.Event{ID: "<Enter>"}, repairPathPage, widgets.NewInput(), widgets.NewInput(), input, widgets.NewInput(), widgets.NewInput(), &next)
+	if !advance || message != "" || next != homePage {
+		t.Fatalf("existing directory repair: advance=%v message=%q next=%v", advance, message, next)
+	}
+}
+
+func TestEscapeLeavesAPIKeyPage(t *testing.T) {
+	key := widgets.NewInput()
+	key.Text = "partially-entered"
+	for _, id := range []string{"<Escape>", "<Esc>", "<Key:Escape>", "<Key:27>", "Escape", "<C-[>", "<C-b>", "\x1b"} {
+		var next page
+		advance, quit, message := handleTextInput(ui.Event{ID: id}, apiKeyPage, widgets.NewInput(), widgets.NewInput(), widgets.NewInput(), key, widgets.NewInput(), &next)
+		if !advance || quit || message != "" || next != providerPage {
+			t.Fatalf("Escape %q: advance=%v quit=%v message=%q next=%v", id, advance, quit, message, next)
+		}
+	}
+}
+
 func TestProviderCatalogIncludesAPIKeysAndChatGPTSignIn(t *testing.T) {
 	choices := providerCatalog()
 	if len(choices) != 9 {
@@ -142,6 +172,153 @@ func TestInitialGenerationOptionsFallsBackToLatestSavedProject(t *testing.T) {
 	got := initialGenerationOptions(config)
 	if got.Mode != "agent" || got.Provider != "gemini" || got.Model != "gemini-test" {
 		t.Fatalf("initial generation options = %+v, want defaults from latest saved project", got)
+	}
+}
+
+func TestChatGPTSignInTimeoutMessageIsActionable(t *testing.T) {
+	if got := chatGPTSignInMessage(context.DeadlineExceeded); got != "ChatGPT sign-in timed out" {
+		t.Fatalf("timeout message = %q", got)
+	}
+	if got := chatGPTSignInMessage(errors.New("sign-in was declined or cancelled")); got != "ChatGPT sign-in failed: sign-in was declined or cancelled" {
+		t.Fatalf("authorization error message = %q", got)
+	}
+}
+
+func TestGenerationReporterStreamsActivityLines(t *testing.T) {
+	updates := make(chan generationUpdate, 2)
+	writer := generationReporter{ctx: context.Background(), updates: updates, secret: "secret-key"}
+	input := []byte("Reading internal/app.go secret-key\nWriting internal/app.go\n")
+	written, err := writer.Write(input)
+	if err != nil || written != len(input) {
+		t.Fatalf("write progress: bytes=%d err=%v", written, err)
+	}
+	for _, want := range []string{"Reading internal/app.go [REDACTED]", "Writing internal/app.go"} {
+		if got := (<-updates).activity; got != want {
+			t.Fatalf("activity = %q, want %q", got, want)
+		}
+	}
+	rows := []string(nil)
+	for i := 0; i < maxActivityRows+5; i++ {
+		rows = appendActivity(rows, fmt.Sprintf("event %d", i))
+	}
+	if len(rows) != maxActivityRows || rows[0] != "event 5" || rows[len(rows)-1] != "event 304" {
+		t.Fatalf("activity history is not bounded correctly: len=%d first=%q last=%q", len(rows), rows[0], rows[len(rows)-1])
+	}
+}
+
+func TestGenerationReporterStopsOnCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	writer := generationReporter{ctx: ctx, updates: make(chan generationUpdate)}
+	if written, err := writer.Write([]byte("waiting for UI")); written != 0 || !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancelled progress write: bytes=%d err=%v", written, err)
+	}
+}
+
+func TestActivityRowsUseDistinctSemanticColors(t *testing.T) {
+	for _, test := range []struct {
+		line, want string
+		color      ui.Color
+	}{
+		{"Waiting on mistral model test-model (turn 1)", "[THINK](fg:" + colorThinking, ui.ColorViolet},
+		{"Created internal/app.go", "[+](fg:" + colorAdded, ui.ColorGreen},
+		{"Updated internal/app.go", "[~](fg:" + colorChanged, ui.ColorGold},
+		{"Removed internal/app.go", "[-](fg:" + colorRemoved, ui.ColorTomato},
+		{"You: add a health endpoint", "[YOU](fg:" + colorUser, ui.ColorLightCyan},
+		{"tool error: unknown tool", "[ERROR](fg:" + colorError, ui.ColorRed},
+	} {
+		got := colorActivity(test.line)
+		if !strings.HasPrefix(got, test.want) {
+			t.Errorf("colorActivity(%q) = %q, want prefix %q", test.line, got, test.want)
+		}
+		cells := ui.ParseStyles(got, ui.NewStyle(ui.ColorWhite))
+		if len(cells) == 0 {
+			t.Fatalf("colorActivity(%q) rendered no cells", test.line)
+		}
+		if cells[0].Style.Fg != test.color {
+			t.Errorf("colorActivity(%q) first color = %v, want %v", test.line, cells[0].Style.Fg, test.color)
+		}
+	}
+}
+
+func TestTUIThemePreservesTerminalForegroundAndRestores(t *testing.T) {
+	previousDefault, previousTitle := ui.Theme.Default, ui.Theme.Block.Title
+	restore := activateTUITheme()
+	defer restore()
+	if ui.Theme.Default.Fg != ui.ColorClear || ui.Theme.Paragraph.Text.Fg != ui.ColorClear || ui.Theme.List.Text.Fg != ui.ColorClear {
+		t.Fatal("base text should inherit the terminal's foreground color")
+	}
+	if ui.Theme.Block.Title.Fg != ui.ColorLightCyan {
+		t.Fatalf("title accent = %v, want light cyan", ui.Theme.Block.Title.Fg)
+	}
+	restore()
+	if ui.Theme.Default != previousDefault || ui.Theme.Block.Title != previousTitle {
+		t.Fatal("TUI theme was not restored after the app exits")
+	}
+}
+
+func TestAgentWorkspaceShowsModelTokenUsageAndPromptInput(t *testing.T) {
+	workspace := newAgentWorkspace()
+	workspace.AddUsage(llm.Usage{Available: true, InputTokens: 12_345, OutputTokens: 678, TotalTokens: 13_023})
+	status := workspace.statusText(filepath.Join(t.TempDir(), "demo"), false, 0)
+	for _, want := range []string{"12,345 input", "678 output", "latest request used 12,345 input tokens", "model window limit unavailable"} {
+		if !strings.Contains(status, want) {
+			t.Errorf("workspace status missing %q:\n%s", want, status)
+		}
+	}
+	options := generationOptions{Mode: "agent", Provider: "mistral", Model: "mistral-test-model"}
+	workspace.Render(120, 36, []string{"Writing internal/server.go"}, options, ".", true, true, 2)
+	if !strings.Contains(workspace.header.Title, "Mistral") || !strings.Contains(workspace.header.Title, "mistral-test-model") {
+		t.Fatalf("selected provider/model missing from header: %q", workspace.header.Title)
+	}
+	if !workspace.composer.ShowCursor || !strings.Contains(workspace.composer.TitleBottom, "queued 2/") {
+		t.Fatalf("busy composer should accept and show queued prompts: cursor=%v footer=%q", workspace.composer.ShowCursor, workspace.composer.TitleBottom)
+	}
+	for _, char := range "Add a health endpoint" {
+		workspace.Handle(ui.Event{Type: ui.KeyboardEvent, ID: string(char)}, false)
+	}
+	workspace.Handle(ui.Event{Type: ui.KeyboardEvent, ID: "q"}, false)
+	workspace.Handle(ui.Event{Type: ui.KeyboardEvent, ID: "b"}, false)
+	if !strings.HasSuffix(workspace.composer.Text, "qb") {
+		t.Fatalf("printable command letters were intercepted: %q", workspace.composer.Text)
+	}
+	action := workspace.Handle(ui.Event{ID: "<Enter>"}, false)
+	if action.prompt != "Add a health endpointqb" || workspace.composer.Text != "" {
+		t.Fatalf("submitted prompt = %q, input remaining = %q", action.prompt, workspace.composer.Text)
+	}
+	workspace.Handle(ui.Event{ID: "<C-j>"}, false)
+	if !strings.Contains(workspace.composer.Text, "\n") {
+		t.Fatal("Ctrl+J did not insert a new line")
+	}
+}
+
+func TestAgentWorkspaceAcceptsAndQueuesPromptWhileBusy(t *testing.T) {
+	workspace := newAgentWorkspace()
+	for _, char := range "Add a health endpoint" {
+		workspace.Handle(ui.Event{Type: ui.KeyboardEvent, ID: string(char)}, true)
+	}
+	action := workspace.Handle(ui.Event{ID: "<Enter>"}, true)
+	if action.prompt != "Add a health endpoint" || !action.queued {
+		t.Fatalf("busy prompt action = %+v, want queued prompt", action)
+	}
+	if workspace.composer.Text != "" {
+		t.Fatalf("queued prompt remained in composer: %q", workspace.composer.Text)
+	}
+}
+
+func TestCancelledGenerationDoesNotCreateProjectDirectory(t *testing.T) {
+	t.Setenv("APPDATA", t.TempDir())
+	parent := t.TempDir()
+	path := filepath.Join(parent, "cancelled")
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	updates := make(chan generationUpdate, 1)
+	_, _, err := saveProjectWithProgress(ctx, "cancelled", "test", path, catalog.Templates()[0], generationOptions{Mode: "local"}, generationReporter{ctx: ctx, updates: updates})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancelled generation error = %v", err)
+	}
+	if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("cancelled generation left project directory behind: %v", err)
 	}
 }
 
@@ -230,7 +407,15 @@ func TestAgentGenerationProfileStoresProviderAndModelOnly(t *testing.T) {
 	if !strings.Contains(string(contents), "generation_mode: agent") || !strings.Contains(string(contents), "ai_provider: openai") || !strings.Contains(string(contents), "ai_model: test-model") {
 		t.Fatalf("AI generation settings missing from profile:\n%s", contents)
 	}
-	if strings.Contains(string(contents), "api_key") || strings.Contains(string(contents), "secret-provider-key") {
-		t.Fatalf("provider secret was serialized:\n%s", contents)
+	config.ProviderKeys = map[string]string{"openai": "secret-provider-key"}
+	if err := projectstore.Save(path, config); err != nil {
+		t.Fatal(err)
+	}
+	contents, err = os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(contents), "provider_keys:") || !strings.Contains(string(contents), "secret-provider-key") {
+		t.Fatalf("provider credentials were not serialized to YAML: %s", contents)
 	}
 }

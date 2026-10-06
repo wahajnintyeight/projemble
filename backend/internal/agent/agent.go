@@ -16,7 +16,6 @@ import (
 
 const (
 	maxToolOutput = 32 << 10
-	maxRounds     = 8
 )
 
 type Config struct {
@@ -30,8 +29,12 @@ type Config struct {
 }
 
 type Agent struct {
-	config   Config
-	provider llm.Provider
+	config     Config
+	provider   llm.Provider
+	workspace  string
+	messages   []llm.Message
+	activities []string
+	usage      llm.Usage
 }
 
 func New(config Config) (*Agent, error) {
@@ -54,6 +57,16 @@ func New(config Config) (*Agent, error) {
 
 // Run asks the selected provider to complete a code task using workspace tools.
 func (agent *Agent) Run(ctx context.Context, workspace, task string, output io.Writer) error {
+	return agent.Turn(ctx, workspace, task, output)
+}
+
+// Turn runs a user prompt and keeps the conversation for later turns on the
+// same workspace. Activity and provider-reported usage are written as they
+// arrive so a TUI can present a live session.
+func (agent *Agent) Turn(ctx context.Context, workspace, task string, output io.Writer) error {
+	if output == nil {
+		output = io.Discard
+	}
 	root, err := filepath.Abs(workspace)
 	if err != nil {
 		return fmt.Errorf("resolve workspace: %w", err)
@@ -68,42 +81,96 @@ func (agent *Agent) Run(ctx context.Context, workspace, task string, output io.W
 	if len(task) > 32<<10 {
 		return errors.New("agent task exceeds 32 KiB")
 	}
-	messages := []llm.Message{
-		{Role: "system", Content: SystemPrompt},
-		{Role: "user", Content: task},
+	if agent.workspace != "" && agent.workspace != root {
+		return errors.New("agent session cannot change workspaces")
+	}
+	if len(agent.messages) == 0 {
+		agent.workspace = root
+		agent.messages = []llm.Message{{Role: "system", Content: SystemPrompt}}
+	}
+	agent.messages = append(agent.messages, llm.Message{Role: "user", Content: task})
+	if err := agent.writeActivity(output, "You: "+task); err != nil {
+		return err
+	}
+	if err := agent.checkpoint(); err != nil {
+		return fmt.Errorf("save conversation: %w", err)
 	}
 	request := llm.Request{Model: agent.config.Model, Tools: llmTools()}
-	for round := 0; round < maxRounds; round++ {
-		request.Messages = messages
-		response, err := agent.provider.Complete(ctx, request)
-		if err != nil {
+	turn := 0
+	for {
+		if err := ctx.Err(); err != nil {
 			return err
 		}
-		message := response.Message
-		if message.Content != "" {
-			if _, err := fmt.Fprintln(output, message.Content); err != nil {
-				return err
-			}
+		turn++
+		if err := agent.writeActivity(output, fmt.Sprintf("Waiting on %s model %s (turn %d)", agent.config.ProviderID, agent.config.Model, turn)); err != nil {
+			return err
 		}
+		request.Messages = agent.messages
+		response, err := agent.provider.Complete(ctx, request)
+		if err != nil {
+			_ = agent.writeActivity(output, "Provider request failed: "+err.Error())
+			return err
+		}
+		if response.Usage.Available {
+			agent.usage.Available = true
+			agent.usage.InputTokens += response.Usage.InputTokens
+			agent.usage.OutputTokens += response.Usage.OutputTokens
+			agent.usage.TotalTokens += response.Usage.TotalTokens
+		}
+		if observer, ok := output.(interface{ ReportUsage(llm.Usage) }); ok {
+			observer.ReportUsage(response.Usage)
+		}
+		message := response.Message
 		if len(message.ToolCalls) == 0 {
-			return nil
+			agent.messages = append(agent.messages, message)
+			if message.Content != "" {
+				if err := agent.writeActivity(output, "Agent summary: "+message.Content); err != nil {
+					return err
+				}
+			}
+			return agent.checkpoint()
 		}
 		if len(message.ToolCalls) > 8 {
 			return errors.New("provider requested more than 8 tools in one response")
 		}
-		messages = append(messages, message)
+		agent.messages = append(agent.messages, message)
 		for _, call := range message.ToolCalls {
+			if err := agent.writeActivity(output, "Action: "+toolAction(call.Name, call.Arguments)); err != nil {
+				return err
+			}
 			result, err := runTool(ctx, root, call.Name, call.Arguments, agent.config.SecretEnvName)
 			if err != nil {
-				result = "tool error: " + err.Error()
+				failure := "tool error: " + err.Error()
+				if result != "" {
+					result += "\n" + failure
+				} else {
+					result = failure
+				}
 			}
 			if agent.config.APIKey != "" {
 				result = strings.ReplaceAll(result, agent.config.APIKey, "[REDACTED]")
 			}
-			messages = append(messages, llm.Message{Role: "tool", ToolCallID: call.ID, ToolName: call.Name, Content: truncate(result, maxToolOutput)})
+			if err := agent.writeActivity(output, toolOutcome(call.Name, call.Arguments, result)); err != nil {
+				return err
+			}
+			agent.messages = append(agent.messages, llm.Message{Role: "tool", ToolCallID: call.ID, ToolName: call.Name, Content: truncate(result, maxToolOutput)})
+		}
+		if err := agent.checkpoint(); err != nil {
+			return fmt.Errorf("save conversation: %w", err)
 		}
 	}
-	return fmt.Errorf("agent reached the %d tool-round limit", maxRounds)
+}
+
+func (agent *Agent) writeActivity(output io.Writer, text string) error {
+	if agent.config.APIKey != "" {
+		text = strings.ReplaceAll(text, agent.config.APIKey, "[REDACTED]")
+	}
+	agent.activities = append(agent.activities, text)
+	if len(agent.activities) > 300 {
+		agent.activities = agent.activities[len(agent.activities)-300:]
+	}
+	_, err := fmt.Fprintln(output, text)
+	return err
 }
 
 func truncate(value string, limit int) string {

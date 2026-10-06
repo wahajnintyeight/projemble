@@ -86,6 +86,7 @@ func readResponseEvents(body io.Reader) (llm.Response, error) {
 	toolCalls := make([]llm.ToolCall, 0)
 	itemCalls := make(map[string]int)
 	var message llm.Message
+	var responseUsage llm.Usage
 	for scanner.Scan() {
 		line := scanner.Bytes()
 		if !bytes.HasPrefix(line, []byte("data: ")) {
@@ -96,9 +97,19 @@ func readResponseEvents(body io.Reader) (llm.Response, error) {
 			break
 		}
 		var event struct {
-			Type  string `json:"type"`
-			Delta string `json:"delta"`
-			Item  struct {
+			Type     string `json:"type"`
+			Delta    string `json:"delta"`
+			Response struct {
+				Usage struct {
+					InputTokens        int `json:"input_tokens"`
+					OutputTokens       int `json:"output_tokens"`
+					TotalTokens        int `json:"total_tokens"`
+					InputTokensDetails struct {
+						CachedTokens int `json:"cached_tokens"`
+					} `json:"input_tokens_details"`
+				} `json:"usage"`
+			} `json:"response"`
+			Item struct {
 				Type      string `json:"type"`
 				ID        string `json:"id"`
 				CallID    string `json:"call_id"`
@@ -129,6 +140,15 @@ func readResponseEvents(body io.Reader) (llm.Response, error) {
 			if index, ok := itemCalls[event.ItemID]; ok && event.Arguments != "" {
 				toolCalls[index].Arguments = event.Arguments
 			}
+		case "response.completed", "response.done":
+			usage := event.Response.Usage
+			responseUsage = llm.Usage{
+				Available:         usage.InputTokens > 0 || usage.OutputTokens > 0 || usage.TotalTokens > 0,
+				InputTokens:       int64(usage.InputTokens),
+				OutputTokens:      int64(usage.OutputTokens),
+				TotalTokens:       int64(usage.TotalTokens),
+				CachedInputTokens: int64(usage.InputTokensDetails.CachedTokens),
+			}
 		case "response.failed", "error":
 			return llm.Response{}, fmt.Errorf("OpenAI Responses request failed: %v", event.Error)
 		}
@@ -141,5 +161,5 @@ func readResponseEvents(body io.Reader) (llm.Response, error) {
 		return llm.Response{}, errors.New("OpenAI Responses stream completed without a message")
 	}
 	message.Role = "assistant"
-	return llm.Response{Message: message}, nil
+	return llm.Response{Message: message, Usage: responseUsage}, nil
 }

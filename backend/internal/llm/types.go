@@ -60,6 +60,16 @@ type Request struct {
 
 type Response struct {
 	Message Message
+	Usage   Usage
+}
+
+// Usage contains token counts reported by a provider response.
+type Usage struct {
+	Available         bool
+	InputTokens       int64
+	OutputTokens      int64
+	TotalTokens       int64
+	CachedInputTokens int64
 }
 
 type Provider interface {

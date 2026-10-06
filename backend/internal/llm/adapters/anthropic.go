@@ -77,7 +77,15 @@ func (provider *Anthropic) Complete(ctx context.Context, input llm.Request) (llm
 			out.ToolCalls = append(out.ToolCalls, llm.ToolCall{ID: block.ID, Name: block.Name, Arguments: string(args)})
 		}
 	}
-	return llm.Response{Message: out}, nil
+	cachedInput := response.Usage.CacheReadInputTokens + response.Usage.CacheCreationInputTokens
+	usage := llm.Usage{
+		InputTokens:       int64(response.Usage.InputTokens + cachedInput),
+		OutputTokens:      int64(response.Usage.OutputTokens),
+		CachedInputTokens: int64(cachedInput),
+	}
+	usage.TotalTokens = usage.InputTokens + usage.OutputTokens
+	usage.Available = usage.InputTokens > 0 || usage.OutputTokens > 0
+	return llm.Response{Message: out, Usage: usage}, nil
 }
 
 type anthropicRequest struct {
@@ -110,6 +118,12 @@ type anthropicTool struct {
 }
 
 type anthropicResponse struct {
+	Usage struct {
+		InputTokens              int `json:"input_tokens"`
+		OutputTokens             int `json:"output_tokens"`
+		CacheReadInputTokens     int `json:"cache_read_input_tokens"`
+		CacheCreationInputTokens int `json:"cache_creation_input_tokens"`
+	} `json:"usage"`
 	Content []struct {
 		Type  string `json:"type"`
 		Text  string `json:"text"`

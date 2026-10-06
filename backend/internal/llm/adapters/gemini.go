@@ -75,7 +75,14 @@ func (provider *Gemini) Complete(ctx context.Context, input llm.Request) (llm.Re
 			out.ToolCalls = append(out.ToolCalls, llm.ToolCall{ID: part.FunctionCall.ID, Name: part.FunctionCall.Name, Arguments: string(args)})
 		}
 	}
-	return llm.Response{Message: out}, nil
+	usage := llm.Usage{
+		InputTokens:       int64(response.UsageMetadata.PromptTokenCount),
+		OutputTokens:      int64(response.UsageMetadata.CandidatesTokenCount),
+		TotalTokens:       int64(response.UsageMetadata.TotalTokenCount),
+		CachedInputTokens: int64(response.UsageMetadata.CachedContentTokenCount),
+	}
+	usage.Available = usage.InputTokens > 0 || usage.OutputTokens > 0 || usage.TotalTokens > 0
+	return llm.Response{Message: out, Usage: usage}, nil
 }
 
 type geminiRequest struct {
@@ -118,6 +125,12 @@ type geminiFunctionDeclaration struct {
 }
 
 type geminiResponse struct {
+	UsageMetadata struct {
+		PromptTokenCount        int `json:"promptTokenCount"`
+		CandidatesTokenCount    int `json:"candidatesTokenCount"`
+		TotalTokenCount         int `json:"totalTokenCount"`
+		CachedContentTokenCount int `json:"cachedContentTokenCount"`
+	} `json:"usageMetadata"`
 	Candidates []struct {
 		Content struct {
 			Parts []geminiPart `json:"parts"`

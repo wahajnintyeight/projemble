@@ -35,6 +35,49 @@ func runTool(ctx context.Context, root, name, raw, secretEnvName string) (string
 	}
 }
 
+func toolAction(name, raw string) string {
+	var args map[string]string
+	if err := json.Unmarshal([]byte(raw), &args); err != nil {
+		return "Calling " + name
+	}
+	switch name {
+	case "list_files":
+		return "Listing files in " + args["path"]
+	case "read_file":
+		return "Reading " + args["path"]
+	case "write_file":
+		return "Writing " + args["path"]
+	case "run_go_check":
+		return "Running go " + args["check"] + " ./..."
+	default:
+		return "Calling " + name
+	}
+}
+
+func toolOutcome(name, raw, result string) string {
+	if name == "run_go_check" || strings.HasPrefix(result, "tool error:") {
+		return result
+	}
+	var args map[string]string
+	_ = json.Unmarshal([]byte(raw), &args)
+	switch name {
+	case "list_files":
+		count := 0
+		for _, line := range strings.Split(result, "\n") {
+			if strings.TrimSpace(line) != "" && !strings.HasPrefix(line, "[limited to first") {
+				count++
+			}
+		}
+		return fmt.Sprintf("Listed %d project files", count)
+	case "read_file":
+		return fmt.Sprintf("Read %s (%d bytes)", args["path"], len(result))
+	case "write_file":
+		return fmt.Sprintf("%s (%d bytes)", result, len(args["content"]))
+	default:
+		return result
+	}
+}
+
 func safePath(root, name string) (string, error) {
 	if name == "" || filepath.IsAbs(name) {
 		return "", errors.New("a non-empty relative path is required")
@@ -128,6 +171,11 @@ func writeFile(root, name, content string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	_, statErr := os.Stat(path)
+	created := errors.Is(statErr, os.ErrNotExist)
+	if statErr != nil && !created {
+		return "", statErr
+	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return "", err
 	}
@@ -139,7 +187,11 @@ func writeFile(root, name, content string) (string, error) {
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		return "", err
 	}
-	return "Wrote " + filepath.ToSlash(name), nil
+	verb := "Updated "
+	if created {
+		verb = "Created "
+	}
+	return verb + filepath.ToSlash(name), nil
 }
 
 func isCredentialPath(path string) bool {

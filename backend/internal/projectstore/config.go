@@ -23,9 +23,12 @@ const (
 )
 
 type Config struct {
-	Version    int                `yaml:"version"`
-	Generation GenerationDefaults `yaml:"generation,omitempty"`
-	Projects   []Project          `yaml:"projects"`
+	LastProjectID   string             `yaml:"last_project_id,omitempty"`
+	ParentDirectory string             `yaml:"parent_directory,omitempty"`
+	Version         int                `yaml:"version"`
+	Generation      GenerationDefaults `yaml:"generation,omitempty"`
+	ProviderKeys    map[string]string  `yaml:"provider_keys,omitempty"`
+	Projects        []Project          `yaml:"projects"`
 }
 
 type GenerationDefaults struct {
@@ -35,6 +38,7 @@ type GenerationDefaults struct {
 }
 
 type Project struct {
+	Status         string            `yaml:"status,omitempty"`
 	ID             string            `yaml:"id"`
 	Name           string            `yaml:"name"`
 	Description    string            `yaml:"description,omitempty"`
@@ -176,6 +180,15 @@ func writeReplace(path string, data []byte) error {
 
 func (config *Config) Upsert(project Project) error {
 	now := time.Now().UTC().Format(time.RFC3339)
+	if project.ID == "" {
+		for _, existing := range config.Projects {
+			if filepath.Clean(existing.Path) == filepath.Clean(project.Path) {
+				project.ID = existing.ID
+				project.CreatedAt = existing.CreatedAt
+				break
+			}
+		}
+	}
 	if project.ID == "" {
 		id, err := newID()
 		if err != nil {

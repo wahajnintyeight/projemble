@@ -51,7 +51,14 @@ func (provider *OpenAICompatible) Complete(ctx context.Context, input llm.Reques
 	for _, call := range message.ToolCalls {
 		out.ToolCalls = append(out.ToolCalls, llm.ToolCall{ID: call.ID, Name: call.Function.Name, Arguments: call.Function.Arguments})
 	}
-	return llm.Response{Message: out}, nil
+	usage := llm.Usage{
+		InputTokens:       int64(response.Usage.PromptTokens),
+		OutputTokens:      int64(response.Usage.CompletionTokens),
+		TotalTokens:       int64(response.Usage.TotalTokens),
+		CachedInputTokens: int64(response.Usage.PromptTokensDetails.CachedTokens),
+	}
+	usage.Available = usage.InputTokens > 0 || usage.OutputTokens > 0 || usage.TotalTokens > 0
+	return llm.Response{Message: out, Usage: usage}, nil
 }
 
 type chatRequest struct {
@@ -92,6 +99,14 @@ type chatFunction struct {
 }
 
 type chatResponse struct {
+	Usage struct {
+		PromptTokens        int `json:"prompt_tokens"`
+		CompletionTokens    int `json:"completion_tokens"`
+		TotalTokens         int `json:"total_tokens"`
+		PromptTokensDetails struct {
+			CachedTokens int `json:"cached_tokens"`
+		} `json:"prompt_tokens_details"`
+	} `json:"usage"`
 	Choices []struct {
 		Message struct {
 			Role      string         `json:"role"`

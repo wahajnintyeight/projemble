@@ -145,7 +145,7 @@ func login(ctx context.Context, output io.Writer) error {
 		return ctx.Err()
 	}
 	if providerErr := values.Get("error"); providerErr != "" {
-		return fmt.Errorf("ChatGPT sign-in failed: %s", providerErr)
+		return chatGPTAuthorizationError(providerErr, values.Get("error_description"))
 	}
 	code, returnedClientID := values.Get("code"), values.Get("client_id")
 	if code == "" {
@@ -258,6 +258,27 @@ func formatTokenError(status int, response tokenResponse) error {
 		return fmt.Errorf("HTTP %d: %s", status, description)
 	}
 	return fmt.Errorf("HTTP %d: token endpoint rejected the request without an error description", status)
+}
+
+func chatGPTAuthorizationError(code, description string) error {
+	code = cleanProviderError(code)
+	description = cleanProviderError(description)
+	if code == "access_denied" {
+		if description != "" {
+			return fmt.Errorf("sign-in was declined or cancelled: %s", description)
+		}
+		return errors.New("sign-in was declined or cancelled; choose another provider or retry")
+	}
+	if code == "3p_login_workspace_scope_denied" {
+		return errors.New("sign-in was blocked by a workspace restriction; this is separate from plan eligibility. Use an account in the authorized workspace, or choose Local templates, an OpenAI API key (separate Platform billing), or another provider. ChatGPT plan usage requires an eligible Plus or Pro account")
+	}
+	if code == "" {
+		return errors.New(description)
+	}
+	if description == "" {
+		return fmt.Errorf("authorization failed (%s)", code)
+	}
+	return fmt.Errorf("authorization failed (%s): %s", code, description)
 }
 
 func cleanProviderError(value string) string {

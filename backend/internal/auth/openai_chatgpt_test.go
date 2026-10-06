@@ -3,6 +3,7 @@ package auth
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -35,6 +36,26 @@ func TestFormatTokenError(t *testing.T) {
 				t.Fatalf("formatTokenError() = %q, want %q", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestWorkspaceScopeErrorExplainsAvailablePaths(t *testing.T) {
+	err := chatGPTAuthorizationError("3p_login_workspace_scope_denied", "")
+	message := err.Error()
+	for _, expected := range []string{"workspace restriction", "Local templates", "OpenAI API key", "eligible Plus or Pro"} {
+		if !strings.Contains(message, expected) {
+			t.Errorf("workspace error %q does not explain %q", message, expected)
+		}
+	}
+}
+
+func TestAccessDeniedExplainsRetryAndKeepsErrorPrefixSingular(t *testing.T) {
+	err := chatGPTAuthorizationError("access_denied", "")
+	if got, want := err.Error(), "sign-in was declined or cancelled; choose another provider or retry"; got != want {
+		t.Fatalf("chatGPTAuthorizationError() = %q, want %q", got, want)
+	}
+	if got := chatGPTAuthorizationError("access_denied", "workspace policy").Error(); got != "sign-in was declined or cancelled: workspace policy" {
+		t.Fatalf("chatGPTAuthorizationError() dropped provider details: %q", got)
 	}
 }
 
