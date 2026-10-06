@@ -86,7 +86,21 @@ The ChatGPT sign-in uses OpenAI's documented public-client loopback OAuth flow w
 
 The provider-neutral agent delegates through an LLM interface, with a factory selecting adapters for OpenAI-compatible APIs, Anthropic Messages, Gemini generateContent, and OpenAI Responses streaming. Its built-in engineering guidance covers repository inspection, minimal changes, safe file boundaries, tests, and truthful reporting. Tools are constrained to project-relative file listing/reading/writing and the fixed Go checks `test`, `build`, and `vet`; it cannot run arbitrary shell commands. Token counts come from provider responses and update as each model request completes. The workspace shows the latest request's input tokens and labels the model's maximum context size unavailable when the provider API does not report it.
 
-## Configuration
+## Agent workspace navigation
+
+On wide terminals, the conversation and message input occupy the left side; a session rail on the right shows the provider, model, status, usage, and context information. Narrow terminals use a stacked layout.
+
+- **F2 / Esc:** return to saved projects.
+- **F3:** change the current project's provider.
+- **F4:** choose another model for the current project.
+- **Ctrl+O:** toggle compact activity and the full transcript.
+- **PageUp / PageDown:** review rendered conversation lines.
+
+Switching views during an instruction cancels that instruction and waits for it to stop. Pending instructions are cleared. Provider/model changes reuse the saved conversation and update the project's YAML profile. The model picker retrieves the provider's catalog with a timeout; **Ctrl+R** refreshes it. A custom model ID is available when discovery fails or is unsupported, including the current ChatGPT integration. Listing a model does not guarantee account quota or tool support.
+
+The model picker supports substring search: press `/`, type to filter, Enter to return to results, then use Up/Down and Enter to select. Escape clears an active query before leaving the picker. The workspace components live in `internal/tui/workspace_layout.go`, `workspace_panel.go`, `workspace_status.go`, `workspace_input.go`, `workspace_navigation.go`, `transcript.go`, and `model_picker.go`. Catalog retrieval belongs to `internal/llm/factory/models.go`.
+
+## Saved configuration
 
 Profiles are stored in `config.yaml` under the operating system's user configuration directory, in a `projemble` subdirectory. Typical locations are:
 

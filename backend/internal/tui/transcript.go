@@ -30,14 +30,7 @@ func (v *transcriptView) content(rows []string, details, follow bool) {
 		v.rows = slices.Clone(rows)
 		v.width, v.details = width, details
 		v.lines = nil
-		for _, row := range conversationRows(rows, details) {
-			cells := ui.ParseStyles(row, ui.NewStyle(ui.ColorClear))
-			if len(cells) == 0 {
-				v.lines = append(v.lines, nil)
-				continue
-			}
-			v.lines = append(v.lines, wrapTranscriptCells(cells, width)...)
-		}
+		v.lines = formatTranscriptRows(borderedMessages(conversationRows(rows, details), width), width)
 	}
 	if follow {
 		v.offset = v.bottom()
@@ -49,9 +42,92 @@ func (v *transcriptView) content(rows []string, details, follow bool) {
 	}
 }
 
+func formatTranscriptRows(rows []string, width int) [][]ui.Cell {
+	var output [][]ui.Cell
+	color := ""
+	for _, row := range rows {
+		if strings.HasPrefix(visibleStyledText(row), "╭─ YOU ") {
+			color = colorUser
+			output = append(output, wrapTranscriptCells(ui.ParseStyles(row, ui.NewStyle(ui.ColorClear)), width)...)
+			continue
+		}
+		if strings.HasPrefix(visibleStyledText(row), "╭─ AGENT ") {
+			color = colorThinking
+			output = append(output, wrapTranscriptCells(ui.ParseStyles(row, ui.NewStyle(ui.ColorClear)), width)...)
+			continue
+		}
+		if strings.HasPrefix(visibleStyledText(row), "╰─") {
+			output = append(output, wrapTranscriptCells(ui.ParseStyles(row, ui.NewStyle(ui.ColorClear)), width)...)
+			color = ""
+			continue
+		}
+		cells := ui.ParseStyles(row, ui.NewStyle(ui.ColorClear))
+		if color == "" {
+			for _, line := range wrapTranscriptCells(cells, max(1, width)) {
+				output = append(output, line)
+			}
+			continue
+		}
+		prefix := ui.ParseStyles(styledMarkdown("│ ", "fg:"+color+",mod:bold"), ui.NewStyle(ui.ColorClear))
+		for _, line := range wrapTranscriptCells(cells, max(1, width-2)) {
+			output = append(output, append(append([]ui.Cell(nil), prefix...), line...))
+		}
+	}
+	return output
+}
+
+func borderedMessages(rows []string, width int) []string {
+	var result, message []string
+	speaker := ""
+	flush := func() {
+		if speaker == "" {
+			return
+		}
+		color, label := colorUser, " YOU "
+		if speaker == "AGENT" {
+			color, label = colorThinking, " AGENT "
+		}
+		left := "╭─" + label
+		if len([]rune(left)) < width {
+			left += strings.Repeat("─", width-len([]rune(left)))
+		}
+		result = append(result, styledMarkdown(left, "fg:"+color+",mod:bold"))
+		result = append(result, message...)
+		result = append(result, styledMarkdown("╰"+strings.Repeat("─", max(0, width-1)), "fg:"+color+",mod:bold"))
+		message = nil
+		speaker = ""
+	}
+	for _, row := range rows {
+		switch {
+		case strings.Contains(row, "[YOU](fg:"):
+			flush()
+			speaker = "YOU"
+		case strings.Contains(row, "[AGENT](fg:"):
+			flush()
+			speaker = "AGENT"
+		case strings.HasPrefix(row, "[THINK]") || strings.HasPrefix(row, "[READ]") || strings.HasPrefix(row, "[CHECK]") || strings.HasPrefix(row, "[ERROR]") || strings.HasPrefix(row, "[EDIT]") || strings.HasPrefix(row, "[PASS]") || strings.HasPrefix(row, "[AI]") || strings.HasPrefix(row, "[+") || strings.HasPrefix(row, "[~]") || strings.HasPrefix(row, "[-]"):
+			flush()
+			result = append(result, row)
+		default:
+			if speaker != "" {
+				message = append(message, row)
+			} else {
+				result = append(result, row)
+			}
+		}
+	}
+	flush()
+	return result
+}
+
 func wrapTranscriptCells(cells []ui.Cell, width int) [][]ui.Cell {
 	var lines [][]ui.Cell
 	for len(cells) > 0 {
+		if cells[0].Rune == '\n' {
+			lines = append(lines, nil)
+			cells = cells[1:]
+			continue
+		}
 		used, end, space := 0, 0, -1
 		for end < len(cells) {
 			if cells[end].Rune == '\n' {

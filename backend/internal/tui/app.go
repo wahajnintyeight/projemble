@@ -119,6 +119,10 @@ func runWithInitializer(initialize func() error) error {
 	list.WrapText = true
 	themeList(list)
 	workspace := newAgentWorkspace()
+	models := newModelPicker()
+	defer models.close()
+	var deferredNavigation *workspaceAction
+	var previousOptions *generationOptions
 	animationTicker := time.NewTicker(120 * time.Millisecond)
 	defer animationTicker.Stop()
 	uiEvents := ui.PollEvents()
@@ -163,6 +167,34 @@ func runWithInitializer(initialize func() error) error {
 			updates <- generationUpdate{err: err, done: true}
 		}()
 	}
+	navigateWorkspace := func(action workspaceAction) {
+		loaded, loadErr := projectstore.LoadDefault()
+		if loadErr != nil {
+			generationRows = appendActivity(generationRows, "Navigation error: "+loadErr.Error())
+			return
+		}
+		config = loaded
+		target := workspaceDestination(action)
+		if target != homePage {
+			models.custom = false
+			if providerConfig.APIKey == "" {
+				providerConfig.APIKey = rememberedKey(providerConfig.Provider, config)
+			}
+			previous := providerConfig
+			previousOptions = &previous
+			project, projectErr := projectForWorkspace(config, projectPath)
+			if projectErr != nil {
+				generationRows = appendActivity(generationRows, "Navigation error: "+projectErr.Error())
+				return
+			}
+			reopening = project
+			selectedProvider = providerIndex(providerConfig.Provider)
+			modelInput.Text = providerConfig.Model
+			modelInput.Cursor = utf8.RuneCountInString(modelInput.Text)
+		}
+		validationMessage = ""
+		currentPage = target
+	}
 
 	for {
 		width, height := ui.TerminalDimensions()
@@ -200,13 +232,8 @@ func runWithInitializer(initialize func() error) error {
 			}
 			ui.Render(keyInput)
 		case aiModelPage:
-			setInputLayout(modelInput, width, height)
-			if validationMessage != "" {
-				setFooter(&modelInput.Block, validationMessage, true)
-			} else {
-				setFooter(&modelInput.Block, "Enter continue | enter a model ID supported by your provider | Esc back", false)
-			}
-			ui.Render(modelInput)
+			models.prepare(providerConfig)
+			models.render(modelInput, width, height, validationMessage)
 		case projectNamePage:
 			setInputLayout(nameInput, width, height)
 			if validationMessage != "" {
@@ -282,6 +309,9 @@ func runWithInitializer(initialize func() error) error {
 			animationEvents = animationTicker.C
 		}
 		select {
+		case result := <-models.results:
+			models.receive(result)
+			continue
 		case <-animationEvents:
 			workspace.Tick()
 			continue
@@ -341,6 +371,12 @@ func runWithInitializer(initialize func() error) error {
 				if quitAfterGeneration {
 					return nil
 				}
+				if deferredNavigation != nil {
+					action := *deferredNavigation
+					deferredNavigation = nil
+					navigateWorkspace(action)
+					continue
+				}
 				if len(pendingPrompts) > 0 && agentSession != nil {
 					prompt := pendingPrompts[0]
 					pendingPrompts = pendingPrompts[1:]
@@ -367,6 +403,19 @@ func runWithInitializer(initialize func() error) error {
 			continue
 		}
 		if currentPage == apiKeyPage || currentPage == aiModelPage || currentPage == projectNamePage || currentPage == projectDescriptionPage || currentPage == projectLocationPage || currentPage == repairPathPage {
+			if currentPage == aiModelPage {
+				var consumed bool
+				event, consumed = models.handle(event, modelInput)
+				if consumed {
+					continue
+				}
+				if isEscapeKey(event.ID) && previousOptions != nil {
+					providerConfig = *previousOptions
+					previousOptions, reopening = nil, nil
+					currentPage = agentProgressPage
+					continue
+				}
+			}
 			if currentPage == apiKeyPage && isEscapeKey(event.ID) {
 				currentPage = providerPage
 				validationMessage = ""
@@ -473,7 +522,10 @@ func runWithInitializer(initialize func() error) error {
 						continue
 					}
 					agentSession = session
+					draft := workspace.composer.Text
 					workspace = newAgentWorkspace()
+					workspace.composer.Text = draft
+					previousOptions = nil
 					workspace.AddUsage(session.Usage())
 					agentSecret = providerConfig.APIKey
 					generationRows = nil
@@ -490,8 +542,27 @@ func runWithInitializer(initialize func() error) error {
 			}
 			continue
 		}
+		if currentPage == providerPage && isEscapeKey(event.ID) && previousOptions != nil && !authPending {
+			providerConfig = *previousOptions
+			previousOptions, reopening = nil, nil
+			currentPage = agentProgressPage
+			continue
+		}
 		if currentPage == agentProgressPage {
 			action := workspace.Handle(event, generationRunning)
+			if action.back || action.provider || action.model {
+				if generationRunning {
+					deferredNavigation = &action
+					pendingPrompts = nil
+					if generationCancel != nil {
+						generationCancel()
+					}
+					generationRows = appendActivity(generationRows, "Cancellation requested; saving before switching views...")
+				} else {
+					navigateWorkspace(action)
+				}
+				continue
+			}
 			if action.scroll {
 				followAgentActivity = action.follow
 				continue
@@ -512,14 +583,6 @@ func runWithInitializer(initialize func() error) error {
 					continue
 				}
 				return nil
-			}
-			if action.back {
-				config, err = projectstore.LoadDefault()
-				if err != nil {
-					return err
-				}
-				currentPage = homePage
-				continue
 			}
 			if action.prompt != "" {
 				if action.queued {

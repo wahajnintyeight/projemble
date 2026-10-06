@@ -268,7 +268,7 @@ func TestAgentWorkspaceShowsModelTokenUsageAndPromptInput(t *testing.T) {
 	}
 	options := generationOptions{Mode: "agent", Provider: "mistral", Model: "mistral-test-model"}
 	workspace.Render(120, 36, []string{"Writing internal/server.go"}, options, ".", true, true, 2)
-	if !strings.Contains(workspace.header.Title, "Mistral") || !strings.Contains(workspace.header.Title, "mistral-test-model") {
+	if !strings.Contains(workspace.header.Text, "Mistral") || !strings.Contains(workspace.header.Text, "mistral-test-model") {
 		t.Fatalf("selected provider/model missing from header: %q", workspace.header.Title)
 	}
 	if !strings.Contains(workspace.header.Text, "Agent is thinking") {

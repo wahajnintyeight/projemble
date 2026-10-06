@@ -71,6 +71,39 @@ func TestCompactActivityRetainsChangesErrorsAndExpandableOutput(t *testing.T) {
 	}
 }
 
+func TestMessageFramesDistinguishSpeakersAndPreserveFormatting(t *testing.T) {
+	rows := appendActivity(nil, "You: change the greeting")
+	rows = appendAssistantMarkdown(rows, "### Updated\nThe greeting is **ready**.")
+	formatted := formatTranscriptRows(borderedMessages(rows, 32), 32)
+	var framed []string
+	for _, line := range formatted {
+		framed = append(framed, ui.CellsToString(line))
+	}
+	text := strings.Join(framed, "\n")
+	for _, want := range []string{"╭─ YOU", "│ change the greeting", "╰", "╭─ AGENT", "│ Updated", "greeting is ready"} {
+		if !strings.Contains(text, want) {
+			t.Errorf("message border missing %q:\n%s", want, text)
+		}
+	}
+	userStart := -1
+	agentStart := -1
+	for i, line := range framed {
+		if strings.HasPrefix(line, "╭─ YOU ") {
+			userStart = i
+		}
+		if strings.HasPrefix(line, "╭─ AGENT ") {
+			agentStart = i
+			break
+		}
+	}
+	if agentStart < 0 {
+		t.Fatal("agent border missing")
+	}
+	if formatted[userStart][0].Style.Fg == formatted[agentStart][0].Style.Fg {
+		t.Fatal("speaker frames do not use distinct colors")
+	}
+}
+
 func TestMarkdownPreservesCodeAndHeadingStructure(t *testing.T) {
 	rows := appendAssistantMarkdown(nil, "### Security Considerations\nUse **bold**, *italic*, and `x[y]`.\n\n```go\nfunc main() {\n    // ### literal\n}\n```\n\n> quoted\n\n1. First\n2. Second")
 	text := visibleStyledText(strings.Join(rows, "\n"))
