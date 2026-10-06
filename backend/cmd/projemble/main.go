@@ -15,6 +15,12 @@ func main() {
 		}
 		return
 	}
+	if len(os.Args) > 1 && os.Args[1] == "auth" {
+		if err := cli.RunAuth(os.Args[2:], os.Stdout, os.Stderr); err != nil {
+			log.Fatal(err)
+		}
+		return
+	}
 	if err := tui.Run(); err != nil {
 		log.Fatal(err)
 	}

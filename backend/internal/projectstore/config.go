@@ -23,8 +23,15 @@ const (
 )
 
 type Config struct {
-	Version  int       `yaml:"version"`
-	Projects []Project `yaml:"projects"`
+	Version    int                `yaml:"version"`
+	Generation GenerationDefaults `yaml:"generation,omitempty"`
+	Projects   []Project          `yaml:"projects"`
+}
+
+type GenerationDefaults struct {
+	Mode     string `yaml:"mode,omitempty"`
+	Provider string `yaml:"provider,omitempty"`
+	Model    string `yaml:"model,omitempty"`
 }
 
 type Project struct {
@@ -36,6 +43,9 @@ type Project struct {
 	AppShapeID     string            `yaml:"app_shape"`
 	ArchitectureID string            `yaml:"architecture"`
 	TemplateID     string            `yaml:"template"`
+	GenerationMode string            `yaml:"generation_mode,omitempty"`
+	AIProvider     string            `yaml:"ai_provider,omitempty"`
+	AIModel        string            `yaml:"ai_model,omitempty"`
 	Settings       map[string]string `yaml:"settings,omitempty"`
 	CreatedAt      string            `yaml:"created_at"`
 	UpdatedAt      string            `yaml:"updated_at"`
@@ -176,6 +186,9 @@ func (config *Config) Upsert(project Project) error {
 	if project.CreatedAt == "" {
 		project.CreatedAt = now
 	}
+	if project.GenerationMode == "" {
+		project.GenerationMode = "local"
+	}
 	project.UpdatedAt = now
 
 	for i := range config.Projects {
@@ -197,6 +210,12 @@ func (config *Config) Upsert(project Project) error {
 func (config Config) Validate() error {
 	if config.Version != currentVersion {
 		return fmt.Errorf("unsupported config version %d", config.Version)
+	}
+	if config.Generation.Mode != "" && config.Generation.Mode != "local" && config.Generation.Mode != "agent" {
+		return fmt.Errorf("unknown default generation mode %q", config.Generation.Mode)
+	}
+	if config.Generation.Mode == "agent" && (strings.TrimSpace(config.Generation.Provider) == "" || strings.TrimSpace(config.Generation.Model) == "") {
+		return errors.New("default AI provider and model are required for agent generation")
 	}
 	seen := make(map[string]struct{}, len(config.Projects))
 	for i, project := range config.Projects {
@@ -222,6 +241,12 @@ func (config Config) Validate() error {
 			project.AppShapeID != template.AppShapeID ||
 			project.ArchitectureID != template.ArchitectureID {
 			return fmt.Errorf("%s: stack, app shape, and architecture must match template %q", prefix, project.TemplateID)
+		}
+		if project.GenerationMode != "" && project.GenerationMode != "local" && project.GenerationMode != "agent" {
+			return fmt.Errorf("%s: unknown generation mode %q", prefix, project.GenerationMode)
+		}
+		if project.GenerationMode == "agent" && (strings.TrimSpace(project.AIProvider) == "" || strings.TrimSpace(project.AIModel) == "") {
+			return fmt.Errorf("%s: AI provider and model are required for agent generation", prefix)
 		}
 	}
 	return nil
