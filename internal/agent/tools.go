@@ -245,12 +245,24 @@ func validateArgumentsOnly(name, raw string) (map[string]string, error) {
 			return nil, err
 		}
 		return args, nil
+	case "delegate_checks":
+		if _, err := decodeSwarmTasks(raw); err != nil {
+			return nil, err
+		}
+		return map[string]string{}, nil
 	default:
 		return nil, fmt.Errorf("unknown tool %q", name)
 	}
 }
 
 func toolAction(name, raw string) string {
+	if name == "delegate_checks" {
+		tasks, err := decodeSwarmTasks(raw)
+		if err != nil {
+			return "Starting verification swarm"
+		}
+		return fmt.Sprintf("Spawning %d verification workers", len(tasks))
+	}
 	if name == "run_command" {
 		args, runtimeArgs, err := decodeRunCommandArguments(raw)
 		if err != nil {
@@ -310,6 +322,14 @@ func toolOutcome(name, raw, result string) string {
 		}
 		return "Command completed: shell"
 	}
+	if name == "delegate_checks" {
+		if strings.HasPrefix(result, "tool error:") {
+			return "Verification swarm failed: " + strings.TrimPrefix(result, "tool error:")
+		}
+		tasks, _ := decodeSwarmTasks(raw)
+		failed := strings.Count(result, "\nFAILED:")
+		return fmt.Sprintf("Verification swarm finished · %d workers · %d failed", len(tasks), failed)
+	}
 	if name == "run_go_check" || strings.HasPrefix(result, "tool error:") {
 		return result
 	}
@@ -367,6 +387,12 @@ func permissionForTool(name, raw string) (PermissionRequest, error) {
 			command = command[:160] + "..."
 		}
 		return PermissionRequest{Action: "Run shell command", Target: cleanPermissionTarget(command)}, nil
+	case "delegate_checks":
+		tasks, err := decodeSwarmTasks(raw)
+		if err != nil {
+			return PermissionRequest{}, err
+		}
+		return PermissionRequest{Action: "Spawn verification agents", Target: fmt.Sprintf("%d workers; runs Go checks and localhost HTTP probes: %s", len(tasks), cleanPermissionTarget(strings.Join(tasks, " | ")))}, nil
 	default:
 		return PermissionRequest{}, fmt.Errorf("unknown tool %q", name)
 	}

@@ -2,6 +2,7 @@ package tui
 
 import (
 	ui "github.com/metaspartan/gotui/v5"
+	"projemble/internal/catalog"
 	"projemble/internal/llm"
 	"projemble/internal/projectstore"
 )
@@ -23,6 +24,7 @@ const (
 	architecturePage
 	stackPage
 	capabilityPage
+	editOptionsPage
 	summaryPage
 	agentProgressPage
 	savedPage
@@ -46,6 +48,46 @@ func normalizeEscape(event ui.Event) ui.Event {
 		event.ID = "<Escape>"
 	}
 	return event
+}
+
+func blueprintEditPageAt(selected int, workload string) page {
+	if selected >= 0 && selected < 4 {
+		return [...]page{projectNamePage, projectDescriptionPage, projectLocationPage, workloadPage}[selected]
+	}
+	pages := []page{architecturePage, capabilityPage, generationModePage, providerPage, accessModePage}
+	if workload == catalog.WorkloadHTTPAPI {
+		pages = []page{topologyPage, architecturePage, capabilityPage, generationModePage, providerPage, accessModePage}
+	}
+	selected -= 4
+	if selected < 0 || selected >= len(pages) {
+		return editOptionsPage
+	}
+	return pages[selected]
+}
+
+type blueprintEditRoute struct {
+	page           page
+	selectedRow    int
+	returnToReview bool
+}
+
+func blueprintEditRouteAt(selected int, workload string, selectedWorkload, shape, architecture, mode, access int) blueprintEditRoute {
+	target := blueprintEditPageAt(selected, workload)
+	route := blueprintEditRoute{page: target}
+	route.returnToReview = target == projectNamePage || target == projectDescriptionPage || target == projectLocationPage || target == workloadPage || target == topologyPage || target == architecturePage || target == capabilityPage
+	switch target {
+	case workloadPage:
+		route.selectedRow = selectedWorkload
+	case topologyPage:
+		route.selectedRow = topologyIndex(shape)
+	case architecturePage:
+		route.selectedRow = architecture
+	case generationModePage:
+		route.selectedRow = mode
+	case accessModePage:
+		route.selectedRow = access
+	}
+	return route
 }
 
 // The create row edits defaults; a saved row edits that project's connection.

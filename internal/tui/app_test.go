@@ -395,8 +395,8 @@ func TestReviewShowsGenerationChoiceWithoutShowingAPIKey(t *testing.T) {
 	if strings.Contains(rows, options.APIKey) {
 		t.Fatal("API key was displayed in the review")
 	}
-	if !strings.Contains(list.TitleBottom, "r provider") {
-		t.Fatalf("review does not expose provider reconfiguration shortcut: %q", list.TitleBottom)
+	if !strings.Contains(list.TitleBottom, "e adjust options") || strings.Contains(list.TitleBottom, "r provider") {
+		t.Fatalf("review should expose one concise options entry point: %q", list.TitleBottom)
 	}
 }
 

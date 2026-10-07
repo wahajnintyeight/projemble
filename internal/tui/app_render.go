@@ -80,6 +80,10 @@ func renderWizardPage(view wizardView, width, height int) (bool, error) {
 		updateChoiceList(list, "Optional capabilities · Space toggles", capabilityChoices(view.selection.capabilities), list.SelectedRow, width, height)
 		setFooter(&list.Block, "Space toggle supported item | Enter continue | planned items are disabled | Esc back", false)
 		renderOnboardingChoices(list, "Optional integrations are composable. Choose at most one database; skip the step to generate a minimal scaffold.", width, height)
+	case editOptionsPage:
+		updateChoiceList(list, "Adjust your blueprint", editBlueprintChoices(workloadIDAt(view.selectedWorkload)), list.SelectedRow, width, height)
+		setFooter(&list.Block, "Enter edit · Esc review", false)
+		renderOnboardingChoices(list, "Everything here is optional to revisit. Choose one area to adjust, or press Esc to return to your project review.", width, height)
 	case summaryPage:
 		return true, renderSummaryPage(list, view.selectedShape, view.selectedArchitecture, view.name, view.description, view.projectPath, view.providerConfig, view.selection, "Enter generate project", view.saveError, width, height)
 	case savedPage:

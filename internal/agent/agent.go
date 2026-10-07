@@ -138,6 +138,8 @@ func (agent *Agent) Turn(ctx context.Context, workspace, task string, output io.
 	changedGoFiles := false
 	goTestAttempted := false
 	goTestPassed := false
+	swarmRuns := 0
+	swarmFailures := 0
 	for {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -177,6 +179,13 @@ func (agent *Agent) Turn(ctx context.Context, workspace, task string, output io.
 		if len(message.ToolCalls) == 0 {
 			if strings.TrimSpace(message.Content) == "" {
 				return agent.stopWithGuardrail(output, "provider returned an empty final response")
+			}
+			if swarmFailures > 0 {
+				status := fmt.Sprintf("WORKER CHECKS FAILED: %d delegated worker(s) reported failed tool actions. Review their evidence before relying on these results.", swarmFailures)
+				message.Content = status + "\n\n" + message.Content
+				if err := agent.writeActivity(output, "Verification status: "+status); err != nil {
+					return err
+				}
 			}
 			if changedGoFiles && hasGoModule(root) && !goTestPassed {
 				status := "UNVERIFIED: no passing `go test ./...` was observed after the latest file changes."
@@ -268,7 +277,24 @@ func (agent *Agent) Turn(ctx context.Context, workspace, task string, output io.
 				if call.Name == "run_shell" {
 					shellRuns++
 				}
-				result, err = runTool(ctx, root, call.Name, call.Arguments, agent.config.SecretEnvName, agent.config.APIKey, output)
+				if call.Name == "delegate_checks" {
+					if swarmRuns >= maxSwarmRunsPerTurn {
+						result = fmt.Sprintf("guardrail: this task has reached the %d agent-swarm limit; continue with a follow-up instruction", maxSwarmRunsPerTurn)
+					} else {
+						swarmRuns++
+						var workerUsage llm.Usage
+						result, workerUsage, err = runSwarm(ctx, root, agent.provider, agent.config, call.Arguments, output)
+						swarmFailures += strings.Count(result, "\nFAILED:")
+						if workerUsage.Available {
+							agent.usage = addUsage(agent.usage, workerUsage)
+							if observer, ok := output.(interface{ ReportUsage(llm.Usage) }); ok {
+								observer.ReportUsage(workerUsage)
+							}
+						}
+					}
+				} else {
+					result, err = runTool(ctx, root, call.Name, call.Arguments, agent.config.SecretEnvName, agent.config.APIKey, output)
+				}
 			}
 			if call.Name == "write_file" && err == nil && requiresGoCheck(validatedPath(call.Arguments)) {
 				changedGoFiles = true
@@ -305,6 +331,18 @@ func (agent *Agent) Turn(ctx context.Context, workspace, task string, output io.
 			return fmt.Errorf("save conversation: %w", err)
 		}
 	}
+}
+
+func addUsage(total, extra llm.Usage) llm.Usage {
+	if !extra.Available {
+		return total
+	}
+	total.Available = true
+	total.InputTokens += extra.InputTokens
+	total.OutputTokens += extra.OutputTokens
+	total.TotalTokens += extra.TotalTokens
+	total.CachedInputTokens += extra.CachedInputTokens
+	return total
 }
 
 func hasGoModule(root string) bool {

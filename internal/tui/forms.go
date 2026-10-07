@@ -315,7 +315,26 @@ func providerAt(index int) (providerChoice, bool) {
 }
 
 func isChoicePage(current page) bool {
-	return current == homePage || current == generationModePage || current == providerPage || current == workloadPage || current == patternPage || current == topologyPage || current == stackPage || current == capabilityPage || current == appShapePage || current == architecturePage || current == accessModePage || current == approvalPage
+	return current == homePage || current == generationModePage || current == providerPage || current == workloadPage || current == patternPage || current == topologyPage || current == stackPage || current == capabilityPage || current == editOptionsPage || current == appShapePage || current == architecturePage || current == accessModePage || current == approvalPage
+}
+
+func editBlueprintChoices(workload string) []catalogChoice {
+	choices := []catalogChoice{
+		{name: "Project name", description: "Set the name used for the new folder and profile."},
+		{name: "Description", description: "Refine the project purpose and agent guidance."},
+		{name: "Directory", description: "Choose where the project folder will live."},
+		{name: "Workload and patterns", description: "Choose how it runs and optional app patterns."},
+	}
+	if workload == catalog.WorkloadHTTPAPI {
+		choices = append(choices, catalogChoice{name: "Service topology", description: "Choose one service or multiple services."})
+	}
+	return append(choices,
+		catalogChoice{name: "Code architecture", description: "Choose how the Go code is organized."},
+		catalogChoice{name: "Optional capabilities", description: "Add a database or other supported integration."},
+		catalogChoice{name: "Generation mode", description: "Generate a scaffold only or add an agent."},
+		catalogChoice{name: "Provider and model", description: "Choose the agent provider and model."},
+		catalogChoice{name: "Agent access", description: "Set how the agent can read and change files."},
+	)
 }
 
 func updateChoiceList(list *widgets.List, title string, choices []catalogChoice, selected, width, height int) {
@@ -365,11 +384,11 @@ func updateSummary(list *widgets.List, name, description string, template catalo
 	}
 	list.SelectedRow = 0
 	list.SelectedStyle = list.TextStyle
+	footer := "e adjust options · Esc back · q quit"
 	if action != "" {
-		setFooter(&list.Block, action+" | F6 access r provider g generation n name d desc p path s shape a arch | q quit", false)
-	} else {
-		setFooter(&list.Block, "F6 access r provider g generation n name d desc p path s shape a arch | q quit", false)
+		footer = action + " · " + footer
 	}
+	setFooter(&list.Block, footer, false)
 	list.SetRect(0, 0, width, height)
 }
 

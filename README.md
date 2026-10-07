@@ -83,6 +83,8 @@ go run ./cmd/projemble project agent \
 
 Supported providers: OpenAI, Claude, DeepSeek, Mistral, Qwen, OpenRouter, Hugging Face, Gemini, and ChatGPT sign-in (`openai-web`). The agent can inspect and edit project files, run fixed Go checks (`go test`, `go vet`, and `go build`), launch a one-shot Go app with separate runtime arguments, and run shell commands. Process output streams into the activity feed. Commands time out after three minutes; a turn can start up to three Go app runs and three shell commands. Long-running server sessions are not supported.
 
+In full-access or ask-always mode, the lead agent can delegate up to three independent verification tasks at once. Each worker gets a separate conversation, can inspect project files and run targeted Go checks, and can probe a running API on `localhost` with read-only `GET`, `HEAD`, or `OPTIONS` requests. Workers cannot edit files, use a shell, reach remote hosts, follow redirects, or spawn more workers. Ask-always asks once before starting a worker batch. Worker activity and token usage are included in the session.
+
 Choose the agent access policy with `F6` in the project builder or agent workspace. The choice is saved as `agent_access_mode` in the local YAML config and reused across projects:
 
 - `read-only`: list and read files under the project; edits and commands are blocked.

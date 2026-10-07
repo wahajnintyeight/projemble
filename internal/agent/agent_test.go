@@ -42,7 +42,7 @@ func TestRunUsesWorkspaceToolsAndEngineeringPrompt(t *testing.T) {
 			t.Errorf("decode request: %v", err)
 			return
 		}
-		if request.ToolChoice != "auto" || len(request.Tools) != 5 {
+		if request.ToolChoice != "auto" || len(request.Tools) != 6 {
 			t.Errorf("tools not enabled: mode=%q count=%d", request.ToolChoice, len(request.Tools))
 		}
 		if requestCount == 1 {
@@ -331,8 +331,12 @@ func TestReadOnlyModeHidesAndRejectsWriteTools(t *testing.T) {
 	if err := validateToolCallsForAccess(root, write, false, AccessFull); err != nil {
 		t.Fatalf("full access rejected a project write: %v", err)
 	}
-	if got := len(llmToolsForAccess(AccessAskAlways)); got != 5 {
-		t.Fatalf("ask-always tools = %d, want read/write/Go/shell operations", got)
+	delegate := []llm.ToolCall{{ID: "delegate", Name: "delegate_checks", Arguments: `{"tasks":["test APIs"]}`}}
+	if err := validateToolCallsForAccess(root, delegate, false, AccessReadOnly); err == nil {
+		t.Fatal("read-only mode accepted worker execution")
+	}
+	if got := len(llmToolsForAccess(AccessAskAlways)); got != 6 {
+		t.Fatalf("ask-always tools = %d, want read/write/Go/shell/swarm operations", got)
 	}
 }
 
@@ -343,6 +347,8 @@ func TestFullAccessStillApprovesUnconfinedShell(t *testing.T) {
 		want bool
 	}{
 		{AccessFull, "run_shell", true},
+		{AccessAskAlways, "delegate_checks", true},
+		{AccessFull, "delegate_checks", false},
 		{AccessFull, "run_command", false},
 		{AccessAskAlways, "read_file", true},
 		{AccessReadOnly, "read_file", false},

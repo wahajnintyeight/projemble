@@ -58,6 +58,7 @@ func runWithInitializer(initialize func() error) error {
 	selectedMode := generationModeIndex(providerConfig)
 	selectedProvider := providerIndex(providerConfig.Provider)
 	editingLocationFromSummary := false
+	editReturnSummary := false
 	validationMessage := ""
 	saveError := ""
 	projectPath := ""
@@ -298,7 +299,7 @@ func runWithInitializer(initialize func() error) error {
 			validationMessage = message
 			continue
 		}
-		if event.ID == "<F6>" && (currentPage == homePage || currentPage == summaryPage) {
+		if event.ID == "<F6>" && currentPage == homePage {
 			openAccessMode(&currentPage, &accessReturnPage, &selectedAccessMode, providerConfig, list)
 			continue
 		}
@@ -336,6 +337,12 @@ func runWithInitializer(initialize func() error) error {
 				return nil
 			}
 			if advance {
+				if editReturnSummary && isEscapeKey(event.ID) {
+					currentPage = summaryPage
+					editingLocationFromSummary = false
+					editReturnSummary = false
+					continue
+				}
 				switch currentPage {
 				case apiKeyPage:
 					if event.ID != "<Enter>" {
@@ -405,12 +412,26 @@ func runWithInitializer(initialize func() error) error {
 					}
 					projectPath = plannedPath
 					editingLocationFromSummary = false
+					editReturnSummary = false
 					currentPage = summaryPage
 					validationMessage = ""
 					continue
 				}
 				if currentPage == projectLocationPage && event.ID == "<Escape>" {
 					editingLocationFromSummary = false
+				}
+				if editReturnSummary && event.ID == "<Enter>" && (currentPage == projectNamePage || currentPage == projectDescriptionPage) {
+					if currentPage == projectNamePage {
+						plannedPath, err := plannedProjectPath(locationInput.Text, nameInput.Text)
+						if err != nil {
+							validationMessage = err.Error()
+							continue
+						}
+						projectPath = plannedPath
+					}
+					editReturnSummary = false
+					currentPage = summaryPage
+					continue
 				}
 				if currentPage == aiModelPage && reopening != nil && event.ID == "<Enter>" {
 					reopening.AIProvider, reopening.AIModel, reopening.GenerationMode = string(providerConfig.Provider), providerConfig.Model, "agent"
@@ -583,12 +604,10 @@ func runWithInitializer(initialize func() error) error {
 				currentPage = projectNamePage
 				continue
 			}
+		case "e":
 			if currentPage == summaryPage {
-				currentPage = projectNamePage
-			}
-		case "d":
-			if currentPage == summaryPage {
-				currentPage = projectDescriptionPage
+				list.SelectedRow = 0
+				currentPage = editOptionsPage
 			}
 		case "p":
 			if currentPage == homePage && selectedHome > 0 && selectedHome <= len(config.Projects) {
@@ -600,22 +619,6 @@ func runWithInitializer(initialize func() error) error {
 				currentPage = repairPathPage
 				continue
 			}
-			if currentPage == summaryPage {
-				editingLocationFromSummary = true
-				currentPage = projectLocationPage
-			}
-		case "s":
-			if currentPage == summaryPage {
-				currentPage = appShapePage
-			}
-		case "a":
-			if currentPage == summaryPage {
-				currentPage = architecturePage
-			}
-		case "g":
-			if currentPage == summaryPage {
-				currentPage = generationModePage
-			}
 		case "r":
 			if currentPage == homePage {
 				editingSettings = true
@@ -626,10 +629,6 @@ func runWithInitializer(initialize func() error) error {
 				models.invalidate()
 				currentPage = providerPage
 				continue
-			}
-			if currentPage == summaryPage {
-				providerConfig.Mode = "agent"
-				currentPage = providerPage
 			}
 		case "<Up>", "k":
 			if isChoicePage(currentPage) {
@@ -650,6 +649,11 @@ func runWithInitializer(initialize func() error) error {
 				followAgentActivity = list.SelectedRow == len(generationRows)-1
 			}
 		case "<Escape>", "b", "<Backspace>":
+			if editReturnSummary && (currentPage == workloadPage || currentPage == topologyPage || currentPage == architecturePage || currentPage == capabilityPage) {
+				editReturnSummary = false
+				currentPage = summaryPage
+				continue
+			}
 			switch currentPage {
 			case homePage:
 				return nil
@@ -664,6 +668,8 @@ func runWithInitializer(initialize func() error) error {
 					currentPage = summaryPage
 				}
 			case appShapePage:
+				currentPage = summaryPage
+			case editOptionsPage:
 				currentPage = summaryPage
 			case capabilityPage:
 				currentPage = stackPage
@@ -720,6 +726,25 @@ func runWithInitializer(initialize func() error) error {
 			}
 		case "<Enter>":
 			switch currentPage {
+			case editOptionsPage:
+				route := blueprintEditRouteAt(list.SelectedRow, workloadIDAt(selectedWorkload), selectedWorkload, selectedShape, selectedArchitecture, generationModeIndex(providerConfig), accessModeIndex(providerConfig.AccessMode))
+				editReturnSummary = route.returnToReview
+				if route.page == projectLocationPage {
+					editingLocationFromSummary = true
+				}
+				if route.page == providerPage {
+					providerConfig.Mode = "agent"
+					selectedMode = generationModeIndex(providerConfig)
+					selectedProvider = providerIndex(providerConfig.Provider)
+				}
+				if route.page == generationModePage {
+					selectedMode = route.selectedRow
+				}
+				if route.page == accessModePage {
+					accessReturnPage = summaryPage
+				}
+				list.SelectedRow = route.selectedRow
+				currentPage = route.page
 			case homePage:
 				if list.SelectedRow == 0 {
 					reopening = nil
@@ -869,7 +894,10 @@ func runWithInitializer(initialize func() error) error {
 				currentPage = patternPage
 			case patternPage:
 				validationMessage = ""
-				if selectedWorkload == workloadIndex(catalog.WorkloadHTTPAPI) {
+				if editReturnSummary {
+					editReturnSummary = false
+					currentPage = summaryPage
+				} else if selectedWorkload == workloadIndex(catalog.WorkloadHTTPAPI) {
 					list.SelectedRow = topologyIndex(selectedShape)
 					currentPage = topologyPage
 				} else {
@@ -883,19 +911,27 @@ func runWithInitializer(initialize func() error) error {
 				}
 				selectedShape = indexOfShape(topologies[list.SelectedRow].ID)
 				selectedArchitecture = clampArchitectureIndex(selectedShape, selectedArchitecture)
-				currentPage = architecturePage
+				if editReturnSummary {
+					editReturnSummary = false
+					currentPage = summaryPage
+				} else {
+					currentPage = architecturePage
+				}
 			case architecturePage:
 				selectedArchitecture = list.SelectedRow
 				list.SelectedRow = 0
-				currentPage = stackPage
+				if editReturnSummary {
+					editReturnSummary = false
+					currentPage = summaryPage
+				} else {
+					currentPage = stackPage
+				}
 			case stackPage:
 				selectedStack = list.SelectedRow
 				if !stackSupported(selectedStack) {
 					validationMessage = "That stack is planned and cannot be generated yet."
 					continue
 				}
-				list.SelectedRow = 0
-				currentPage = capabilityPage
 				plannedPath, err := plannedProjectPath(locationInput.Text, nameInput.Text)
 				if err != nil {
 					validationMessage = err.Error()
@@ -903,7 +939,15 @@ func runWithInitializer(initialize func() error) error {
 					continue
 				}
 				projectPath = plannedPath
-				currentPage = generationModePage
+				list.SelectedRow = 0
+				currentPage = capabilityPage
+			case capabilityPage:
+				if editReturnSummary {
+					editReturnSummary = false
+					currentPage = summaryPage
+				} else {
+					currentPage = generationModePage
+				}
 			case summaryPage:
 				template, ok := templateForChoices(selectedShape, selectedArchitecture)
 				if !ok {
