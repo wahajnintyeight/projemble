@@ -115,6 +115,10 @@ func TestOpenAIResponsesUsesOAuthAndAssemblesStreamedToolArguments(t *testing.T)
 		if request["store"] != false || request["stream"] != true {
 			t.Errorf("privacy/stream flags = %+v", request)
 		}
+		reasoning, ok := request["reasoning"].(map[string]any)
+		if !ok || reasoning["effort"] != "high" {
+			t.Errorf("reasoning effort = %+v", request["reasoning"])
+		}
 		w.Header().Set("Content-Type", "text/event-stream")
 		events := []map[string]any{
 			{"type": "response.output_item.added", "item": map[string]any{"type": "function_call", "id": "fc_1", "call_id": "call_1", "name": "write_file", "arguments": ""}},
@@ -129,7 +133,7 @@ func TestOpenAIResponsesUsesOAuthAndAssemblesStreamedToolArguments(t *testing.T)
 	}))
 	defer server.Close()
 	provider := NewOpenAIResponses(llm.Config{Provider: llm.OpenAIWeb, Model: "gpt-test", BaseURL: server.URL + "/v1", Credentials: staticToken("chatgpt-token"), Client: server.Client()})
-	response, err := provider.Complete(context.Background(), llm.Request{Model: "gpt-test", Messages: []llm.Message{{Role: "system", Content: "rules"}, {Role: "user", Content: "write"}}})
+	response, err := provider.Complete(context.Background(), llm.Request{Model: "gpt-test", ReasoningEffort: llm.ReasoningHigh, Messages: []llm.Message{{Role: "system", Content: "rules"}, {Role: "user", Content: "write"}}})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	ui "github.com/metaspartan/gotui/v5"
 	"github.com/metaspartan/gotui/v5/widgets"
+	"projemble/internal/auth"
 	"projemble/internal/llm"
 	"projemble/internal/llm/factory"
 	"strings"
@@ -12,7 +13,7 @@ import (
 )
 
 type modelResult struct {
-	models []string
+	models []factory.ModelOption
 	err    error
 }
 type modelPicker struct {
@@ -20,7 +21,8 @@ type modelPicker struct {
 	search   *widgets.Input
 	provider llm.ProviderID
 	key      string
-	models   []string
+	models   []factory.ModelOption
+	visible  []factory.ModelOption
 	results  chan modelResult
 	cancel   context.CancelFunc
 	message  string
@@ -48,6 +50,10 @@ func (p *modelPicker) close() {
 	}
 	p.results = nil
 }
+func (p *modelPicker) invalidate() {
+	p.close()
+	p.provider = ""
+}
 func (p *modelPicker) prepare(options generationOptions) {
 	p.current = options.Model
 	if p.provider == options.Provider && p.key == options.APIKey {
@@ -56,6 +62,7 @@ func (p *modelPicker) prepare(options generationOptions) {
 	p.close()
 	p.provider, p.key = options.Provider, options.APIKey
 	p.models = nil
+	p.visible = nil
 	p.custom = false
 	p.query = ""
 	p.querying = false
@@ -66,14 +73,28 @@ func (p *modelPicker) prepare(options generationOptions) {
 	p.results = make(chan modelResult, 1)
 	results := p.results
 	go func() {
-		models, err := factory.ListModels(ctx, llm.Config{Provider: options.Provider, APIKey: options.APIKey})
+		config := llm.Config{Provider: options.Provider, APIKey: options.APIKey, Credentials: options.Credentials}
+		var models []factory.ModelOption
+		var err error
+		if options.Provider == llm.OpenAIWeb {
+			if config.Credentials == nil {
+				config.Credentials = &auth.ChatGPTTokenSource{}
+			}
+			models, err = factory.ListChatGPTModels(ctx, config)
+		} else {
+			var ids []string
+			ids, err = factory.ListModels(ctx, config)
+			for _, id := range ids {
+				models = append(models, factory.ModelOption{ID: id, DisplayName: id})
+			}
+		}
 		results <- modelResult{models, err}
 	}()
 }
 func (p *modelPicker) receive(result modelResult) {
 	p.models = result.models
 	for i, model := range p.models {
-		if model == p.current {
+		if model.ID == p.current {
 			p.list.SelectedRow = i + 1
 			break
 		}
@@ -99,21 +120,36 @@ func (p *modelPicker) render(input *widgets.Input, width, height int, validation
 		selected = p.list.Rows[p.list.SelectedRow]
 	}
 	query := strings.ToLower(strings.TrimSpace(p.query))
-	filtered := make([]string, 0, len(p.models))
+	filtered := make([]factory.ModelOption, 0, len(p.models))
 	for _, model := range p.models {
-		if query == "" || strings.Contains(strings.ToLower(model), query) {
+		if query == "" || strings.Contains(strings.ToLower(model.ID), query) || strings.Contains(strings.ToLower(model.DisplayName), query) {
 			filtered = append(filtered, model)
 		}
 	}
 	p.list.Title = "Provider models"
+	if name, ok := providerAtIndex(p.provider); ok {
+		p.list.Title = name + " models"
+	}
 	rows := make([]string, 0, len(filtered)+1)
 	rows = append(rows, "Enter a custom model ID")
-	rows = append(rows, filtered...)
+	for _, model := range filtered {
+		label := model.DisplayName
+		if label == model.ID {
+			rows = append(rows, model.ID)
+		} else {
+			rows = append(rows, label+" ("+model.ID+")")
+		}
+	}
 	p.list.Rows = rows
+	p.visible = filtered
 	if p.querying {
 		p.list.SelectedRow = 0
 		for i, model := range filtered {
-			if model == selected {
+			label := model.ID
+			if model.DisplayName != model.ID {
+				label = model.DisplayName + " (" + model.ID + ")"
+			}
+			if label == selected {
 				p.list.SelectedRow = i + 1
 				break
 			}
@@ -147,6 +183,7 @@ func (p *modelPicker) render(input *widgets.Input, width, height int, validation
 	ui.Render(p.search, p.list)
 }
 func (p *modelPicker) handle(event ui.Event, input *widgets.Input) (ui.Event, bool) {
+	event = normalizeEscape(event)
 	if p.custom {
 		if isEscapeKey(event.ID) {
 			p.custom = false
@@ -157,13 +194,10 @@ func (p *modelPicker) handle(event ui.Event, input *widgets.Input) (ui.Event, bo
 	if p.querying {
 		switch event.ID {
 		case "<Escape>":
-			if p.query != "" {
-				p.query = ""
-				p.search.Text = ""
-				p.search.Cursor = 0
-			} else {
-				p.querying = false
-			}
+			p.query = ""
+			p.search.Text = ""
+			p.search.Cursor = 0
+			p.querying = false
 			return event, true
 		case "<Enter>":
 			p.querying = false
@@ -219,12 +253,8 @@ func (p *modelPicker) handle(event ui.Event, input *widgets.Input) (ui.Event, bo
 			return event, true
 		}
 		i := p.list.SelectedRow - 1
-		if i >= 0 && i < len(p.models) {
-			selected := p.models[i]
-			if i+1 < len(p.list.Rows) {
-				selected = p.list.Rows[i+1]
-			}
-			input.Text = strings.TrimSpace(selected)
+		if i >= 0 && i < len(p.visible) {
+			input.Text = p.visible[i].ID
 			return event, false
 		}
 	case "<Escape>", "<C-c>":

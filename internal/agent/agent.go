@@ -25,13 +25,14 @@ const (
 )
 
 type Config struct {
-	ProviderID    llm.ProviderID
-	BaseURL       string
-	Model         string
-	APIKey        string
-	SecretEnvName string
-	Credentials   llm.TokenSource
-	Client        *http.Client
+	ProviderID      llm.ProviderID
+	BaseURL         string
+	Model           string
+	ReasoningEffort llm.ReasoningEffort
+	APIKey          string
+	SecretEnvName   string
+	Credentials     llm.TokenSource
+	Client          *http.Client
 }
 
 type Agent struct {
@@ -59,6 +60,11 @@ func New(config Config) (*Agent, error) {
 		return nil, err
 	}
 	return &Agent{config: config, provider: provider}, nil
+}
+
+// SetReasoningEffort applies to the agent's next provider request.
+func (agent *Agent) SetReasoningEffort(effort llm.ReasoningEffort) {
+	agent.config.ReasoningEffort = effort
 }
 
 // Run asks the selected provider to complete a code task using workspace tools.
@@ -101,7 +107,7 @@ func (agent *Agent) Turn(ctx context.Context, workspace, task string, output io.
 	if err := agent.checkpoint(); err != nil {
 		return fmt.Errorf("save conversation: %w", err)
 	}
-	request := llm.Request{Model: agent.config.Model, Tools: llmTools()}
+	request := llm.Request{Model: agent.config.Model, ReasoningEffort: agent.config.ReasoningEffort, Tools: llmTools()}
 	providerCalls := 0
 	toolCalls := 0
 	goChecks := 0
@@ -116,7 +122,11 @@ func (agent *Agent) Turn(ctx context.Context, workspace, task string, output io.
 			return agent.stopWithGuardrail(output, fmt.Sprintf("agent task stopped after %d provider requests; send a follow-up instruction to continue", maxProviderCallsPerTurn))
 		}
 		providerCalls++
-		if err := agent.writeActivity(output, fmt.Sprintf("Waiting on %s model %s (request %d/%d)", agent.config.ProviderID, agent.config.Model, providerCalls, maxProviderCallsPerTurn)); err != nil {
+		requestLabel := fmt.Sprintf("Waiting on %s model %s", agent.config.ProviderID, agent.config.Model)
+		if agent.config.ReasoningEffort != llm.ReasoningDefault {
+			requestLabel += " · thinking " + string(agent.config.ReasoningEffort)
+		}
+		if err := agent.writeActivity(output, fmt.Sprintf("%s (request %d/%d)", requestLabel, providerCalls, maxProviderCallsPerTurn)); err != nil {
 			return err
 		}
 		request.Messages = agent.messages

@@ -239,17 +239,19 @@ type catalogChoice struct {
 }
 
 type providerChoice struct {
-	id   llm.ProviderID
-	name string
-	env  string
+	id              llm.ProviderID
+	name            string
+	env             string
+	newRegistration bool
 }
 
 type generationOptions struct {
-	Mode        string
-	Provider    llm.ProviderID
-	Model       string
-	APIKey      string
-	Credentials llm.TokenSource
+	Mode            string
+	Provider        llm.ProviderID
+	Model           string
+	ReasoningEffort llm.ReasoningEffort
+	APIKey          string
+	Credentials     llm.TokenSource
 }
 
 type chatGPTAuthResult struct {
@@ -270,7 +272,10 @@ func providerChoices() []catalogChoice {
 	for _, choice := range choices {
 		description := "API key required"
 		if choice.id == llm.OpenAIWeb {
-			description = "Eligible Plus/Pro accounts; free accounts can use Local templates, an OpenAI API key, or another provider"
+			description = "Sign in with your saved ChatGPT account and workspace"
+			if choice.newRegistration {
+				description = "Start a fresh registration to select a different account or workspace"
+			}
 		}
 		result = append(result, catalogChoice{name: choice.name, description: description})
 	}
@@ -287,7 +292,8 @@ func providerCatalog() []providerChoice {
 		{id: llm.OpenRouter, name: "OpenRouter", env: "OPENROUTER_API_KEY"},
 		{id: llm.HuggingFace, name: "Hugging Face", env: "HF_TOKEN"},
 		{id: llm.Gemini, name: "Gemini", env: "GEMINI_API_KEY"},
-		{id: llm.OpenAIWeb, name: "ChatGPT plan (eligible Plus/Pro)"},
+		{id: llm.OpenAIWeb, name: "ChatGPT plan — saved account/workspace"},
+		{id: llm.OpenAIWeb, name: "ChatGPT plan — choose account/workspace", newRegistration: true},
 	}
 }
 
@@ -370,12 +376,12 @@ func initialGenerationOptions(config projectstore.Config) generationOptions {
 				latest = project
 			}
 		}
-		defaults = projectstore.GenerationDefaults{Mode: latest.GenerationMode, Provider: latest.AIProvider, Model: latest.AIModel}
+		defaults = projectstore.GenerationDefaults{Mode: latest.GenerationMode, Provider: latest.AIProvider, Model: latest.AIModel, ReasoningEffort: latest.ReasoningEffort}
 	}
 	if defaults.Mode != "agent" {
 		return generationOptions{Mode: "local"}
 	}
-	return generationOptions{Mode: "agent", Provider: llm.ProviderID(defaults.Provider), Model: defaults.Model}
+	return generationOptions{Mode: "agent", Provider: llm.ProviderID(defaults.Provider), Model: defaults.Model, ReasoningEffort: llm.ReasoningEffort(defaults.ReasoningEffort)}
 }
 
 func providerIndex(id llm.ProviderID) int {
@@ -395,6 +401,9 @@ func chatGPTSignInMessage(err error) string {
 }
 
 func providerAtIndex(id llm.ProviderID) (string, bool) {
+	if id == llm.OpenAIWeb {
+		return "ChatGPT plan", true
+	}
 	for _, choice := range providerCatalog() {
 		if choice.id == id {
 			return choice.name, true

@@ -56,23 +56,24 @@ func saveProjectWithProgress(parent context.Context, name, description, path str
 		return "", "", err
 	}
 	config.ParentDirectory = filepath.Dir(path)
-	config.Generation = projectstore.GenerationDefaults{Mode: options.Mode, Provider: string(options.Provider), Model: options.Model}
+	config.Generation = projectstore.GenerationDefaults{Mode: options.Mode, Provider: string(options.Provider), Model: options.Model, ReasoningEffort: string(options.ReasoningEffort)}
 	settings := make(map[string]string)
 	if template.ServiceFrameworkID != "" {
 		settings[catalog.SettingServiceFramework] = template.ServiceFrameworkID
 	}
 	project := projectstore.Project{
-		Name:           name,
-		Description:    description,
-		Path:           path,
-		StackID:        template.StackID,
-		AppShapeID:     template.AppShapeID,
-		ArchitectureID: template.ArchitectureID,
-		TemplateID:     template.ID,
-		GenerationMode: options.Mode,
-		AIProvider:     string(options.Provider),
-		AIModel:        options.Model,
-		Settings:       settings,
+		Name:            name,
+		Description:     description,
+		Path:            path,
+		StackID:         template.StackID,
+		AppShapeID:      template.AppShapeID,
+		ArchitectureID:  template.ArchitectureID,
+		TemplateID:      template.ID,
+		GenerationMode:  options.Mode,
+		AIProvider:      string(options.Provider),
+		AIModel:         options.Model,
+		ReasoningEffort: string(options.ReasoningEffort),
+		Settings:        settings,
 	}
 	if err := config.Upsert(project); err != nil {
 		return "", "", err
@@ -107,7 +108,7 @@ func saveProjectWithProgress(parent context.Context, name, description, path str
 		return path, "", fmt.Errorf("save project profile: %w", err)
 	}
 	if options.Mode == "agent" {
-		providerAgent, err := agent.New(agent.Config{ProviderID: options.Provider, Model: options.Model, APIKey: options.APIKey, Credentials: options.Credentials})
+		providerAgent, err := agent.New(agent.Config{ProviderID: options.Provider, Model: options.Model, ReasoningEffort: options.ReasoningEffort, APIKey: options.APIKey, Credentials: options.Credentials})
 		if err != nil {
 			return "", "", fmt.Errorf("configure AI agent: %w (starter preserved at %s)", err, path)
 		}

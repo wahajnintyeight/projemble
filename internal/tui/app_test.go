@@ -141,14 +141,17 @@ func TestEscapeLeavesAPIKeyPage(t *testing.T) {
 
 func TestProviderCatalogIncludesAPIKeysAndChatGPTSignIn(t *testing.T) {
 	choices := providerCatalog()
-	if len(choices) != 9 {
-		t.Fatalf("provider choices = %d, want 9", len(choices))
+	if len(choices) != 10 {
+		t.Fatalf("provider choices = %d, want 10", len(choices))
 	}
 	if choices[0].id != "openai" || choices[0].env != "OPENAI_API_KEY" {
 		t.Fatalf("OpenAI provider setup = %+v", choices[0])
 	}
-	if choices[len(choices)-1].id != "openai-web" || choices[len(choices)-1].env != "" {
-		t.Fatalf("ChatGPT provider setup = %+v", choices[len(choices)-1])
+	if choices[len(choices)-2].id != "openai-web" || choices[len(choices)-2].newRegistration || choices[len(choices)-2].env != "" {
+		t.Fatalf("saved ChatGPT provider setup = %+v", choices[len(choices)-2])
+	}
+	if choices[len(choices)-1].id != "openai-web" || !choices[len(choices)-1].newRegistration {
+		t.Fatalf("new ChatGPT registration setup = %+v", choices[len(choices)-1])
 	}
 }
 
@@ -260,11 +263,19 @@ func TestTUIThemePreservesTerminalForegroundAndRestores(t *testing.T) {
 func TestAgentWorkspaceShowsModelTokenUsageAndPromptInput(t *testing.T) {
 	workspace := newAgentWorkspace()
 	workspace.AddUsage(llm.Usage{Available: true, InputTokens: 12_345, OutputTokens: 678, TotalTokens: 13_023})
-	status := workspace.statusText(filepath.Join(t.TempDir(), "demo"), false, 0)
+	status := workspace.statusText("Mistral", filepath.Join(t.TempDir(), "demo"), false, 0)
 	for _, want := range []string{"12,345 input", "678 output", "latest request used 12,345 input tokens", "model window limit unavailable"} {
 		if !strings.Contains(status, want) {
 			t.Errorf("workspace status missing %q:\n%s", want, status)
 		}
+	}
+	chatGPTStatus := workspace.statusText("ChatGPT plan", ".", false, 0)
+	if !strings.Contains(chatGPTStatus, chatGPTUsageURL) {
+		t.Fatalf("ChatGPT plan usage link missing from compact status: %q", chatGPTStatus)
+	}
+	workspace.Render(160, 40, nil, generationOptions{Provider: llm.OpenAIWeb, Model: "gpt-test"}, ".", false, true, 0)
+	if !strings.Contains(workspace.header.Text, "chatgpt.com/settings/usage") {
+		t.Fatalf("ChatGPT plan usage link missing from session rail: %q", workspace.header.Text)
 	}
 	options := generationOptions{Mode: "agent", Provider: "mistral", Model: "mistral-test-model"}
 	workspace.Render(120, 36, []string{"Writing internal/server.go"}, options, ".", true, true, 2)
@@ -276,7 +287,7 @@ func TestAgentWorkspaceShowsModelTokenUsageAndPromptInput(t *testing.T) {
 	}
 	frame := workspace.header.Text
 	workspace.Tick()
-	if workspace.statusText(".", true, 2) == frame {
+	if workspace.statusText("Mistral", ".", true, 2) == frame {
 		t.Fatal("agent spinner did not advance")
 	}
 	if !workspace.composer.ShowCursor || !strings.Contains(workspace.composer.TitleBottom, "queued 2/") {

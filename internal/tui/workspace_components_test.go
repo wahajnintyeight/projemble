@@ -1,18 +1,25 @@
 package tui
 
 import (
+	"strings"
+	"testing"
+
 	ui "github.com/metaspartan/gotui/v5"
 	"github.com/metaspartan/gotui/v5/widgets"
+	"projemble/internal/llm/factory"
 	"projemble/internal/projectstore"
-	"testing"
 )
 
 func TestModelPickerSearchFiltersAndRestoresNavigation(t *testing.T) {
 	p := newModelPicker()
-	p.models = []string{"mistral-large-latest", "mistral-small-latest", "open-mistral-nemo"}
+	p.models = []factory.ModelOption{
+		{ID: "mistral-large-latest", DisplayName: "mistral-large-latest"},
+		{ID: "mistral-small-latest", DisplayName: "mistral-small-latest"},
+		{ID: "open-mistral-nemo", DisplayName: "open-mistral-nemo"},
+	}
 	p.message = "3 models"
 	input := widgets.NewInput()
-	p.list.Rows = append([]string{"Enter a custom model ID"}, p.models...)
+	p.list.Rows = []string{"Enter a custom model ID", "mistral-large-latest", "mistral-small-latest", "open-mistral-nemo"}
 	p.list.SelectedRow = 2
 	p.handle(ui.Event{ID: "/"}, input)
 	for _, key := range "large" {
@@ -36,8 +43,8 @@ func TestModelPickerSearchFiltersAndRestoresNavigation(t *testing.T) {
 	}
 	p.querying = true
 	p.handle(ui.Event{ID: "<Escape>"}, input)
-	if p.query != "" || !p.querying {
-		t.Fatal("Escape should clear search before leaving picker")
+	if p.query != "" || p.querying {
+		t.Fatal("Escape should clear search and return to model list")
 	}
 }
 
@@ -67,11 +74,27 @@ func TestWorkspaceResponsiveSidebarAndNavigation(t *testing.T) {
 	}
 }
 
+func TestChatGPTWorkspaceShowsThinkingControl(t *testing.T) {
+	w := newAgentWorkspace()
+	options := generationOptions{Provider: "openai-web", Model: "gpt-5.6-luna", ReasoningEffort: "high"}
+	w.Render(160, 40, nil, options, ".", false, true, 0)
+	if !strings.Contains(w.header.Text, "Thinking effort:") || !strings.Contains(w.header.Text, "high") || !strings.Contains(w.navigation.Text, "F5  Thinking effort") || !strings.Contains(w.composer.TitleBottom, "F5 thinking") {
+		t.Fatalf("thinking control is missing from the workspace: header=%q navigation=%q footer=%q", w.header.Text, w.navigation.Text, w.composer.TitleBottom)
+	}
+	if action := w.Handle(ui.Event{ID: "<F5>"}, false); !action.thinking {
+		t.Fatal("F5 did not open the thinking effort control")
+	}
+}
+
 func TestModelPickerSelectsListedAndCustomModels(t *testing.T) {
 	p := newModelPicker()
-	p.models = []string{"model-a", "model-b"}
+	p.models = []factory.ModelOption{
+		{ID: "model-a", DisplayName: "model-a"},
+		{ID: "model-b", DisplayName: "model-b"},
+	}
 	input := widgets.NewInput()
 	p.list.SelectedRow = 2
+	p.render(input, 100, 30, "")
 	_, consumed := p.handle(ui.Event{ID: "<Enter>"}, input)
 	if consumed || input.Text != "model-b" {
 		t.Fatal("listed model did not populate confirmation")

@@ -7,6 +7,15 @@ import (
 
 type ProviderID string
 
+type ReasoningEffort string
+
+const (
+	ReasoningDefault ReasoningEffort = ""
+	ReasoningLow     ReasoningEffort = "low"
+	ReasoningMedium  ReasoningEffort = "medium"
+	ReasoningHigh    ReasoningEffort = "high"
+)
+
 const (
 	OpenAI      ProviderID = "openai"
 	Claude      ProviderID = "claude"
@@ -53,9 +62,10 @@ type Message struct {
 }
 
 type Request struct {
-	Model    string
-	Messages []Message
-	Tools    []Tool
+	Model           string
+	ReasoningEffort ReasoningEffort
+	Messages        []Message
+	Tools           []Tool
 }
 
 type Response struct {

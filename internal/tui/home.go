@@ -112,7 +112,7 @@ func resumeProject(project projectstore.Project, options generationOptions) (*ag
 	if options.Provider == llm.OpenAIWeb {
 		options.Credentials = &auth.ChatGPTTokenSource{}
 	}
-	session, err := agent.New(agent.Config{ProviderID: options.Provider, Model: options.Model, APIKey: options.APIKey, Credentials: options.Credentials})
+	session, err := agent.New(agent.Config{ProviderID: options.Provider, Model: options.Model, ReasoningEffort: options.ReasoningEffort, APIKey: options.APIKey, Credentials: options.Credentials})
 	if err != nil {
 		return nil, err
 	}

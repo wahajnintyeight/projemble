@@ -16,6 +16,8 @@ import (
 // OpenAIResponses adapts Responses API streaming turns, used by ChatGPT-plan OAuth.
 type OpenAIResponses struct{ adapter }
 
+const chatGPTUsageLimitCode = "subscription_sharing_usage_limit_exceeded"
+
 func NewOpenAIResponses(config llm.Config) *OpenAIResponses {
 	return &OpenAIResponses{adapter{config: config}}
 }
@@ -45,6 +47,9 @@ func (provider *OpenAIResponses) Complete(ctx context.Context, input llm.Request
 		tools = append(tools, map[string]any{"type": "function", "name": tool.Name, "description": tool.Description, "parameters": tool.Parameters, "strict": false})
 	}
 	payload := map[string]any{"model": input.Model, "instructions": instructions, "input": items, "tools": tools, "store": false, "stream": true}
+	if input.ReasoningEffort != llm.ReasoningDefault {
+		payload["reasoning"] = map[string]any{"effort": input.ReasoningEffort}
+	}
 	body, err := json.Marshal(payload)
 	if err != nil {
 		return llm.Response{}, fmt.Errorf("encode Responses request: %w", err)
@@ -74,6 +79,9 @@ func (provider *OpenAIResponses) Complete(ctx context.Context, input llm.Request
 		data, readErr := io.ReadAll(io.LimitReader(response.Body, maxProviderResponse+1))
 		if readErr != nil {
 			return llm.Response{}, fmt.Errorf("read OpenAI response error: %w", readErr)
+		}
+		if chatGPTUsageLimitReached(response.StatusCode, data) {
+			return llm.Response{}, fmt.Errorf("ChatGPT plan usage limit reached; review usage and app limits at https://chatgpt.com/settings/usage")
 		}
 		return llm.Response{}, fmt.Errorf("OpenAI returned HTTP %d: %s", response.StatusCode, clipped(string(data), 2048))
 	}
@@ -108,6 +116,10 @@ func readResponseEvents(body io.Reader) (llm.Response, error) {
 						CachedTokens int `json:"cached_tokens"`
 					} `json:"input_tokens_details"`
 				} `json:"usage"`
+				Error *struct {
+					Code    string `json:"code"`
+					Message string `json:"message"`
+				} `json:"error"`
 			} `json:"response"`
 			Item struct {
 				Type      string `json:"type"`
@@ -119,7 +131,10 @@ func readResponseEvents(body io.Reader) (llm.Response, error) {
 			ItemID    string `json:"item_id"`
 			Name      string `json:"name"`
 			Arguments string `json:"arguments"`
-			Error     any    `json:"error"`
+			Error     *struct {
+				Code    string `json:"code"`
+				Message string `json:"message"`
+			} `json:"error"`
 		}
 		if err := json.Unmarshal(data, &event); err != nil {
 			return llm.Response{}, fmt.Errorf("decode OpenAI stream event: %w", err)
@@ -150,7 +165,17 @@ func readResponseEvents(body io.Reader) (llm.Response, error) {
 				CachedInputTokens: int64(usage.InputTokensDetails.CachedTokens),
 			}
 		case "response.failed", "error":
-			return llm.Response{}, fmt.Errorf("OpenAI Responses request failed: %v", event.Error)
+			providerError := event.Error
+			if providerError == nil {
+				providerError = event.Response.Error
+			}
+			if providerError != nil && providerError.Code == chatGPTUsageLimitCode {
+				return llm.Response{}, fmt.Errorf("ChatGPT plan usage limit reached; review usage and app limits at https://chatgpt.com/settings/usage")
+			}
+			if providerError != nil && providerError.Message != "" {
+				return llm.Response{}, fmt.Errorf("OpenAI Responses request failed (%s): %s", providerError.Code, providerError.Message)
+			}
+			return llm.Response{}, fmt.Errorf("OpenAI Responses request failed: %v", providerError)
 		}
 	}
 	if err := scanner.Err(); err != nil {
@@ -162,4 +187,16 @@ func readResponseEvents(body io.Reader) (llm.Response, error) {
 	}
 	message.Role = "assistant"
 	return llm.Response{Message: message, Usage: responseUsage}, nil
+}
+
+func chatGPTUsageLimitReached(status int, body []byte) bool {
+	if status != http.StatusTooManyRequests {
+		return false
+	}
+	var response struct {
+		Error struct {
+			Code string `json:"code"`
+		} `json:"error"`
+	}
+	return json.Unmarshal(body, &response) == nil && response.Error.Code == chatGPTUsageLimitCode
 }

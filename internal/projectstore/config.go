@@ -32,27 +32,29 @@ type Config struct {
 }
 
 type GenerationDefaults struct {
-	Mode     string `yaml:"mode,omitempty"`
-	Provider string `yaml:"provider,omitempty"`
-	Model    string `yaml:"model,omitempty"`
+	Mode            string `yaml:"mode,omitempty"`
+	Provider        string `yaml:"provider,omitempty"`
+	Model           string `yaml:"model,omitempty"`
+	ReasoningEffort string `yaml:"reasoning_effort,omitempty"`
 }
 
 type Project struct {
-	Status         string            `yaml:"status,omitempty"`
-	ID             string            `yaml:"id"`
-	Name           string            `yaml:"name"`
-	Description    string            `yaml:"description,omitempty"`
-	Path           string            `yaml:"path"`
-	StackID        string            `yaml:"stack"`
-	AppShapeID     string            `yaml:"app_shape"`
-	ArchitectureID string            `yaml:"architecture"`
-	TemplateID     string            `yaml:"template"`
-	GenerationMode string            `yaml:"generation_mode,omitempty"`
-	AIProvider     string            `yaml:"ai_provider,omitempty"`
-	AIModel        string            `yaml:"ai_model,omitempty"`
-	Settings       map[string]string `yaml:"settings,omitempty"`
-	CreatedAt      string            `yaml:"created_at"`
-	UpdatedAt      string            `yaml:"updated_at"`
+	Status          string            `yaml:"status,omitempty"`
+	ID              string            `yaml:"id"`
+	Name            string            `yaml:"name"`
+	Description     string            `yaml:"description,omitempty"`
+	Path            string            `yaml:"path"`
+	StackID         string            `yaml:"stack"`
+	AppShapeID      string            `yaml:"app_shape"`
+	ArchitectureID  string            `yaml:"architecture"`
+	TemplateID      string            `yaml:"template"`
+	GenerationMode  string            `yaml:"generation_mode,omitempty"`
+	AIProvider      string            `yaml:"ai_provider,omitempty"`
+	AIModel         string            `yaml:"ai_model,omitempty"`
+	ReasoningEffort string            `yaml:"reasoning_effort,omitempty"`
+	Settings        map[string]string `yaml:"settings,omitempty"`
+	CreatedAt       string            `yaml:"created_at"`
+	UpdatedAt       string            `yaml:"updated_at"`
 }
 
 func NewConfig() Config {
@@ -230,6 +232,9 @@ func (config Config) Validate() error {
 	if config.Generation.Mode == "agent" && (strings.TrimSpace(config.Generation.Provider) == "" || strings.TrimSpace(config.Generation.Model) == "") {
 		return errors.New("default AI provider and model are required for agent generation")
 	}
+	if !validReasoningEffort(config.Generation.ReasoningEffort) {
+		return fmt.Errorf("unknown reasoning effort %q", config.Generation.ReasoningEffort)
+	}
 	seen := make(map[string]struct{}, len(config.Projects))
 	for i, project := range config.Projects {
 		prefix := fmt.Sprintf("projects[%d]", i)
@@ -242,6 +247,9 @@ func (config Config) Validate() error {
 		seen[project.ID] = struct{}{}
 		if strings.TrimSpace(project.Name) == "" {
 			return fmt.Errorf("%s: name is required", prefix)
+		}
+		if !validReasoningEffort(project.ReasoningEffort) {
+			return fmt.Errorf("%s: unknown reasoning effort %q", prefix, project.ReasoningEffort)
 		}
 		if strings.TrimSpace(project.Path) == "" {
 			return fmt.Errorf("%s: path is required", prefix)
@@ -263,6 +271,15 @@ func (config Config) Validate() error {
 		}
 	}
 	return nil
+}
+
+func validReasoningEffort(effort string) bool {
+	switch effort {
+	case "", "low", "medium", "high":
+		return true
+	default:
+		return false
+	}
 }
 
 func newID() (string, error) {

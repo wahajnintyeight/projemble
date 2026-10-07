@@ -8,7 +8,7 @@ import (
 func TestGenerationDefaultsSurviveConfigRoundTrip(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.yaml")
 	want := NewConfig()
-	want.Generation = GenerationDefaults{Mode: "agent", Provider: "claude", Model: "claude-test-model"}
+	want.Generation = GenerationDefaults{Mode: "agent", Provider: "claude", Model: "claude-test-model", ReasoningEffort: "high"}
 	want.ProviderKeys = map[string]string{"claude": "test-secret"}
 	if err := Save(path, want); err != nil {
 		t.Fatalf("Save() error = %v", err)

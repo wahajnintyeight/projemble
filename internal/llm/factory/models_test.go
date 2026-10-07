@@ -62,3 +62,29 @@ func TestModelCatalogErrorsDoNotExposeCredentials(t *testing.T) {
 		t.Fatal("claimed ChatGPT discovery")
 	}
 }
+
+func TestChatGPTModelCatalogUsesVisibleModelsAndDisplayNames(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/models" || r.Header.Get("Authorization") != "Bearer chatgpt-token" {
+			t.Fatalf("request path/auth = %q/%q", r.URL.Path, r.Header.Get("Authorization"))
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"models":[{"slug":"gpt-test","display_name":"GPT Test","visibility":"list"},{"slug":"internal-model","display_name":"Internal","visibility":"hide"},{"slug":"gpt-next","display_name":"","visibility":"list"}]}`))
+	}))
+	defer server.Close()
+
+	got, err := ListChatGPTModels(context.Background(), llm.Config{
+		Provider:    llm.OpenAIWeb,
+		BaseURL:     server.URL + "/v1",
+		Client:      server.Client(),
+		Credentials: modelToken("chatgpt-token"),
+	})
+	want := []ModelOption{{ID: "gpt-test", DisplayName: "GPT Test"}, {ID: "gpt-next", DisplayName: "gpt-next"}}
+	if err != nil || !reflect.DeepEqual(got, want) {
+		t.Fatalf("models=%+v error=%v, want %+v", got, err, want)
+	}
+}
+
+type modelToken string
+
+func (token modelToken) AccessToken(context.Context) (string, error) { return string(token), nil }

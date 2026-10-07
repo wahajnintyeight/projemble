@@ -115,11 +115,12 @@ func parseProvider(value string) (llm.ProviderID, string, error) {
 
 func RunAuth(args []string, stdout, stderr io.Writer) error {
 	if len(args) == 0 || args[0] != "login" {
-		return errors.New("usage: projemble auth login --provider openai-web")
+		return errors.New("usage: projemble auth login --provider openai-web [--new-registration]")
 	}
 	flags := flag.NewFlagSet("auth login", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	provider := flags.String("provider", "openai-web", "provider authentication method")
+	newRegistration := flags.Bool("new-registration", false, "register a new ChatGPT client to choose a different account or workspace")
 	if err := flags.Parse(args[1:]); err != nil {
 		return err
 	}
@@ -128,6 +129,9 @@ func RunAuth(args []string, stdout, stderr io.Writer) error {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
+	if *newRegistration {
+		return auth.LoginNewRegistration(ctx, stdout)
+	}
 	return auth.Login(ctx, stdout)
 }
 

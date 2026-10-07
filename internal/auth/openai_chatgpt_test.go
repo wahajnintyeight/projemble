@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -21,7 +22,12 @@ func TestFormatTokenError(t *testing.T) {
 		{
 			name:     "guides expired authorization code recovery",
 			response: tokenResponse{Error: "invalid_grant"},
-			want:     "HTTP 400: authorization code was rejected or expired; start a fresh ChatGPT sign-in",
+			want:     "HTTP 400: invalid_grant: authorization code was rejected or expired; discard this code and retry ChatGPT sign-in",
+		},
+		{
+			name:     "preserves provider rejection detail",
+			response: tokenResponse{Error: "invalid_grant", ErrorDescription: "the code verifier did not match"},
+			want:     "HTTP 400: invalid_grant: the code verifier did not match; discard this code and retry ChatGPT sign-in",
 		},
 		{
 			name:     "handles empty error body",
@@ -42,7 +48,7 @@ func TestFormatTokenError(t *testing.T) {
 func TestWorkspaceScopeErrorExplainsAvailablePaths(t *testing.T) {
 	err := chatGPTAuthorizationError("3p_login_workspace_scope_denied", "")
 	message := err.Error()
-	for _, expected := range []string{"workspace restriction", "Local templates", "OpenAI API key", "eligible Plus or Pro"} {
+	for _, expected := range []string{"workspace restriction", "new-registration", "Local templates", "OpenAI API key", "eligible account"} {
 		if !strings.Contains(message, expected) {
 			t.Errorf("workspace error %q does not explain %q", message, expected)
 		}
@@ -92,5 +98,66 @@ func TestPendingRegistrationPersistsClientIDForRetry(t *testing.T) {
 	}
 	if _, err := loadPendingRegistration(); !os.IsNotExist(err) {
 		t.Fatalf("load after clear error = %v, want os.ErrNotExist", err)
+	}
+}
+
+func TestRegistrationRetryReusesIssuedClientID(t *testing.T) {
+	tests := []struct {
+		name                  string
+		forceNew              bool
+		previousID, pendingID string
+		want                  registrationAttempt
+	}{
+		{
+			name:     "new registration starts with dynamic client",
+			forceNew: true,
+			want:     registrationAttempt{clientID: "dynamic_agent_client", newRegistration: true},
+		},
+		{
+			name:       "explicit new account ignores workspace bound pending registration",
+			forceNew:   true,
+			previousID: "oaiapp_saved",
+			pendingID:  "oaiapp_pending",
+			want:       registrationAttempt{clientID: "dynamic_agent_client", newRegistration: true},
+		},
+		{
+			name:       "saved registration stays selected",
+			previousID: "oaiapp_saved",
+			pendingID:  "oaiapp_pending",
+			want:       registrationAttempt{clientID: "oaiapp_saved"},
+		},
+		{
+			name:      "pending registration resumes without saved account",
+			pendingID: "oaiapp_pending",
+			want:      registrationAttempt{clientID: "oaiapp_pending", retryingPending: true},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := chooseRegistration(test.forceNew, test.previousID, test.pendingID); got != test.want {
+				t.Fatalf("chooseRegistration() = %+v, want %+v", got, test.want)
+			}
+		})
+	}
+}
+
+func TestEnsureChatGPTDoesNotRestartLoginForCorruptSavedCredentials(t *testing.T) {
+	t.Setenv("APPDATA", t.TempDir())
+	path, err := credentialPath()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("{broken"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err = EnsureChatGPT(ctx, nil)
+	if err == nil || !strings.Contains(err.Error(), "invalid character") {
+		t.Fatalf("EnsureChatGPT() error = %v, want credential parse error", err)
 	}
 }

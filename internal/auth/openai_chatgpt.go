@@ -49,12 +49,23 @@ type pendingRegistration struct {
 }
 
 // Login uses OpenAI's documented public-client Sign in with ChatGPT flow.
-func Login(ctx context.Context, output io.Writer) error { return login(ctx, output) }
+func Login(ctx context.Context, output io.Writer) error { return login(ctx, output, false) }
+
+// LoginNewRegistration starts a fresh ChatGPT client registration, allowing
+// the user to choose a different account or workspace than the saved client.
+func LoginNewRegistration(ctx context.Context, output io.Writer) error {
+	return login(ctx, output, true)
+}
 
 func EnsureChatGPT(ctx context.Context, output io.Writer) (*ChatGPTTokenSource, error) {
 	source := &ChatGPTTokenSource{}
-	if _, err := source.AccessToken(ctx); err == nil {
+	if _, err := loadCredential(); err == nil {
+		if _, err := source.AccessToken(ctx); err != nil {
+			return nil, err
+		}
 		return source, nil
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return nil, err
 	}
 	if err := Login(ctx, output); err != nil {
 		return nil, err
@@ -65,7 +76,7 @@ func EnsureChatGPT(ctx context.Context, output io.Writer) (*ChatGPTTokenSource, 
 	return source, nil
 }
 
-func login(ctx context.Context, output io.Writer) error {
+func loginAttempt(ctx context.Context, output io.Writer, attempt registrationAttempt) error {
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		return fmt.Errorf("start local sign-in callback: %w", err)
@@ -90,15 +101,7 @@ func login(ctx context.Context, output io.Writer) error {
 		return err
 	}
 	previous, _ := loadCredential()
-	clientID := previous.ClientID
-	if clientID == "" {
-		pending, _ := loadPendingRegistration()
-		clientID = pending.ClientID
-	}
-	newRegistration := clientID == ""
-	if clientID == "" {
-		clientID = "dynamic_agent_client"
-	}
+	clientID, newRegistration := attempt.clientID, attempt.newRegistration
 
 	callback := make(chan url.Values, 1)
 	mux := http.NewServeMux()
@@ -132,7 +135,7 @@ func login(ctx context.Context, output io.Writer) error {
 	}
 	if newRegistration {
 		query.Set("agent_name_hint", "Projemble")
-	} else if previous.IDToken != "" {
+	} else if !attempt.retryingPending && previous.IDToken != "" {
 		query.Set("id_token_hint", previous.IDToken)
 	}
 	if err := openBrowser(authorizeEndpoint + "?" + query.Encode()); err != nil {
@@ -187,7 +190,7 @@ func login(ctx context.Context, output io.Writer) error {
 	if idToken.Nonce != nonce {
 		return errors.New("ChatGPT identity token nonce mismatch")
 	}
-	if previous.Subject != "" && previous.Subject != idToken.Subject {
+	if !newRegistration && !attempt.retryingPending && previous.Subject != "" && previous.Subject != idToken.Subject {
 		return errors.New("ChatGPT account changed during reauthorization; existing credentials were preserved")
 	}
 	var claims struct {
@@ -246,7 +249,10 @@ func formatTokenError(status int, response tokenResponse) error {
 	code := cleanProviderError(response.Error)
 	description := cleanProviderError(response.ErrorDescription)
 	if code == "invalid_grant" {
-		return fmt.Errorf("HTTP %d: authorization code was rejected or expired; start a fresh ChatGPT sign-in", status)
+		if description != "" {
+			return &tokenGrantError{fmt.Errorf("HTTP %d: invalid_grant: %s; discard this code and retry ChatGPT sign-in", status, description)}
+		}
+		return &tokenGrantError{fmt.Errorf("HTTP %d: invalid_grant: authorization code was rejected or expired; discard this code and retry ChatGPT sign-in", status)}
 	}
 	if code != "" && description != "" {
 		return fmt.Errorf("HTTP %d: %s: %s", status, code, description)
@@ -270,7 +276,7 @@ func chatGPTAuthorizationError(code, description string) error {
 		return errors.New("sign-in was declined or cancelled; choose another provider or retry")
 	}
 	if code == "3p_login_workspace_scope_denied" {
-		return errors.New("sign-in was blocked by a workspace restriction; this is separate from plan eligibility. Use an account in the authorized workspace, or choose Local templates, an OpenAI API key (separate Platform billing), or another provider. ChatGPT plan usage requires an eligible Plus or Pro account")
+		return errors.New("sign-in was blocked by a workspace restriction; this is separate from plan eligibility. If you need another workspace, run `projemble auth login --provider openai-web --new-registration` and select it during sign-in. Otherwise use an account in the authorized workspace, Local templates, an OpenAI API key (separate Platform billing), or another provider. ChatGPT plan usage requires an eligible account")
 	}
 	if code == "" {
 		return errors.New(description)

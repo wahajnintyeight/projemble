@@ -20,33 +20,6 @@ import (
 	"projemble/internal/projectstore"
 )
 
-type page int
-
-const (
-	generationModePage page = iota
-	providerPage
-	apiKeyPage
-	aiModelPage
-	projectNamePage
-	projectDescriptionPage
-	projectLocationPage
-	appShapePage
-	architecturePage
-	summaryPage
-	agentProgressPage
-	savedPage
-	homePage
-	repairPathPage
-)
-
-const (
-	maxProjectNameRunes = 60
-	maxDescriptionRunes = 160
-	maxProjectPathRunes = 4096
-	maxAPIKeyRunes      = 4096
-	maxModelRunes       = 128
-)
-
 func Run() error {
 	return runWithInitializer(ui.Init)
 }
@@ -203,7 +176,7 @@ func runWithInitializer(initialize func() error) error {
 		switch currentPage {
 		case homePage:
 			updateChoiceList(list, "Projemble | Projects", homeChoices(config), selectedHome, width, height)
-			setFooter(&list.Block, "Enter open | p repair path | n new project | r provider settings | q quit", false)
+			setFooter(&list.Block, "Enter open | p repair path | n new project | r selected project provider | Esc/q quit", false)
 			if validationMessage != "" {
 				setFooter(&list.Block, validationMessage, true)
 			}
@@ -214,6 +187,9 @@ func runWithInitializer(initialize func() error) error {
 			renderOnboardingChoices(list, blueprintIntroduction(selectedShape, selectedArchitecture), width, height)
 		case providerPage:
 			updateChoiceList(list, "Choose an AI provider", providerChoices(), selectedProvider, width, height)
+			if reopening != nil {
+				list.Title = "Provider for " + reopening.Name
+			}
 			if authPending {
 				setFooter(&list.Block, "Finish sign-in in your browser | Esc/b cancels | q quits", false)
 			} else if validationMessage != "" {
@@ -400,12 +376,14 @@ func runWithInitializer(initialize func() error) error {
 				validationMessage = chatGPTSignInMessage(result.err)
 				continue
 			}
+			models.invalidate()
 			providerConfig.Credentials = result.source
 			modelInput.Placeholder = "Model ID available to your ChatGPT plan"
 			currentPage = aiModelPage
 			validationMessage = ""
 			continue
 		}
+		event = normalizeEscape(event)
 		if event.ID == "<C-l>" {
 			refreshTerminalView()
 			lastPage = page(-1)
@@ -459,20 +437,21 @@ func runWithInitializer(initialize func() error) error {
 						break
 					}
 					providerConfig.Model = modelInput.Text
-					config.Generation = projectstore.GenerationDefaults{Mode: "agent", Provider: string(providerConfig.Provider), Model: providerConfig.Model}
-					if err := projectstore.SaveDefault(config); err != nil {
-						validationMessage = err.Error()
-						continue
-					}
 					if editingSettings && event.ID == "<Enter>" {
-						config.Generation = projectstore.GenerationDefaults{Mode: "agent", Provider: string(providerConfig.Provider), Model: providerConfig.Model}
-						if err := projectstore.SaveDefault(config); err != nil {
+						if err := saveGenerationSelection(&config, providerConfig, reopening); err != nil {
 							validationMessage = err.Error()
 							continue
 						}
 						editingSettings = false
+						reopening = nil
 						currentPage = homePage
 						continue
+					}
+					if reopening == nil {
+						if err := saveGenerationSelection(&config, providerConfig, nil); err != nil {
+							validationMessage = err.Error()
+							continue
+						}
 					}
 				}
 				if currentPage == repairPathPage && event.ID == "<Enter>" {
@@ -522,11 +501,7 @@ func runWithInitializer(initialize func() error) error {
 						validationMessage = err.Error()
 						continue
 					}
-					if err := config.Upsert(*reopening); err != nil {
-						validationMessage = err.Error()
-						continue
-					}
-					if err := projectstore.SaveDefault(config); err != nil {
+					if err := saveGenerationSelection(&config, providerConfig, reopening); err != nil {
 						validationMessage = err.Error()
 						continue
 					}
@@ -559,6 +534,33 @@ func runWithInitializer(initialize func() error) error {
 		}
 		if currentPage == agentProgressPage {
 			action := workspace.Handle(event, generationRunning)
+			if action.thinking {
+				if providerConfig.Provider != llm.OpenAIWeb {
+					generationRows = appendActivity(generationRows, "Thinking effort is available for ChatGPT plan sessions.")
+				} else if generationRunning {
+					generationRows = appendActivity(generationRows, "Wait for the current response to finish before changing thinking effort.")
+				} else {
+					previousEffort := providerConfig.ReasoningEffort
+					providerConfig.ReasoningEffort = nextReasoningEffort(providerConfig.ReasoningEffort)
+					loaded, err := projectstore.LoadDefault()
+					if err == nil {
+						config = loaded
+						var project *projectstore.Project
+						project, err = projectForWorkspace(config, projectPath)
+						if err == nil {
+							err = saveGenerationSelection(&config, providerConfig, project)
+						}
+					}
+					if err != nil {
+						providerConfig.ReasoningEffort = previousEffort
+						generationRows = appendActivity(generationRows, "Could not save thinking effort: "+err.Error())
+					} else {
+						agentSession.SetReasoningEffort(providerConfig.ReasoningEffort)
+						generationRows = clearThinkingActivity(generationRows)
+					}
+				}
+				continue
+			}
 			if action.back || action.provider || action.model {
 				if generationRunning {
 					deferredNavigation = &action
@@ -681,7 +683,11 @@ func runWithInitializer(initialize func() error) error {
 		case "r":
 			if currentPage == homePage {
 				editingSettings = true
-				providerConfig.Mode = "agent"
+				providerConfig, reopening = homeProviderSelection(config, selectedHome)
+				previousOptions = nil
+				selectedProvider = providerIndex(providerConfig.Provider)
+				modelInput.Text = providerConfig.Model
+				models.invalidate()
 				currentPage = providerPage
 				continue
 			}
@@ -766,6 +772,8 @@ func runWithInitializer(initialize func() error) error {
 					currentPage = generationModePage
 					if editingSettings {
 						editingSettings = false
+						reopening = nil
+						providerConfig = initialGenerationOptions(config)
 						currentPage = homePage
 					}
 				}
@@ -824,7 +832,7 @@ func runWithInitializer(initialize func() error) error {
 					currentPage = savedPage
 					continue
 				}
-				providerConfig = generationOptions{Mode: "agent", Provider: llm.ProviderID(project.AIProvider), Model: project.AIModel}
+				providerConfig = generationOptions{Mode: "agent", Provider: llm.ProviderID(project.AIProvider), Model: project.AIModel, ReasoningEffort: llm.ReasoningEffort(project.ReasoningEffort)}
 				providerConfig.APIKey = rememberedKey(providerConfig.Provider, config)
 				selectedProvider = providerIndex(providerConfig.Provider)
 				modelInput.Text = providerConfig.Model
@@ -886,6 +894,7 @@ func runWithInitializer(initialize func() error) error {
 				providerChanged := choice.id != providerConfig.Provider
 				providerConfig.Provider = choice.id
 				providerConfig.APIKey = ""
+				providerConfig.Credentials = nil
 				if providerChanged {
 					providerConfig.Model = ""
 					modelInput.Text = ""
@@ -899,7 +908,14 @@ func runWithInitializer(initialize func() error) error {
 					authResults = make(chan chatGPTAuthResult, 1)
 					results := authResults
 					go func() {
-						tokenSource, err := auth.EnsureChatGPT(ctx, io.Discard)
+						var tokenSource *auth.ChatGPTTokenSource
+						var err error
+						if choice.newRegistration {
+							err = auth.LoginNewRegistration(ctx, io.Discard)
+						}
+						if err == nil {
+							tokenSource, err = auth.EnsureChatGPT(ctx, io.Discard)
+						}
 						results <- chatGPTAuthResult{source: tokenSource, err: err}
 					}()
 				} else {

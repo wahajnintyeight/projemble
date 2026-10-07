@@ -8,6 +8,7 @@ import (
 )
 
 func (workspace *agentWorkspace) Handle(event ui.Event, busy bool) workspaceAction {
+	event = normalizeEscape(event)
 	if workspace.mentions.visible {
 		switch event.ID {
 		case "<Escape>":
@@ -35,6 +36,8 @@ func (workspace *agentWorkspace) Handle(event ui.Event, busy bool) workspaceActi
 		return workspaceAction{provider: true}
 	case "<F4>":
 		return workspaceAction{model: true}
+	case "<F5>":
+		return workspaceAction{thinking: true}
 	case "<C-o>":
 		workspace.details = !workspace.details
 		return workspaceAction{}

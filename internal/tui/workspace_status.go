@@ -4,6 +4,8 @@ import (
 	"fmt"
 )
 
+const chatGPTUsageURL = "https://chatgpt.com/settings/usage"
+
 func (w *agentWorkspace) sidebarText(provider, model, path string, running bool, queued int) string {
 	state := "Ready"
 	if running {
@@ -17,10 +19,14 @@ func (w *agentWorkspace) sidebarText(provider, model, path string, running bool,
 	if w.last.Available {
 		context = fmt.Sprintf("Latest: %s input", formatTokens(w.last.InputTokens))
 	}
-	return fmt.Sprintf("%s %s\n%s %s\n%s %s\n\n%s\n%s\n\n%s\n%s\nWindow limit not reported\n\n%s\n%s", styleLabel("Provider:"), provider, styleLabel("Model:"), model, styleLabel("Status:"), state, styleLabel("Session tokens"), usage, styleLabel("Context"), context, styleLabel("Workspace"), path)
+	text := fmt.Sprintf("%s %s\n%s %s\n%s %s\n\n%s\n%s\n\n%s\n%s\nWindow limit not reported\n\n%s\n%s", styleLabel("Provider:"), provider, styleLabel("Model:"), model, styleLabel("Status:"), state, styleLabel("Session tokens"), usage, styleLabel("Context"), context, styleLabel("Workspace"), path)
+	if provider == "ChatGPT plan" {
+		text += "\n\n" + styleLabel("Plan limits") + "\nManage usage:\nchatgpt.com/settings/usage"
+	}
+	return text
 }
 
-func (workspace *agentWorkspace) statusText(path string, running bool, queued int) string {
+func (workspace *agentWorkspace) statusText(provider, path string, running bool, queued int) string {
 	tokenLabel := "Usage:"
 	tokens := "waiting for provider token counts"
 	context := "token count and model limit not reported yet"
@@ -35,7 +41,11 @@ func (workspace *agentWorkspace) statusText(path string, running bool, queued in
 	if workspace.last.Available {
 		context = fmt.Sprintf("latest request used %s input tokens  ·  model window limit unavailable", formatTokens(workspace.last.InputTokens))
 	}
-	return fmt.Sprintf("%s %s\n%s %s\n%s %s\n%s %s", styleLabel("Status:"), state, styleLabel("Workspace:"), path, styleLabel(tokenLabel), tokens, styleLabel("Context:"), context)
+	text := fmt.Sprintf("%s %s\n%s %s\n%s %s\n%s %s", styleLabel("Status:"), state, styleLabel("Workspace:"), path, styleLabel(tokenLabel), tokens, styleLabel("Context:"), context)
+	if provider == "ChatGPT plan" {
+		text += "\n" + styleLabel("Manage usage:") + " " + chatGPTUsageURL
+	}
+	return text
 }
 
 func formatTokens(tokens int64) string {
