@@ -73,8 +73,7 @@ type blueprintEditRoute struct {
 
 func blueprintEditRouteAt(selected int, workload string, selectedWorkload, shape, architecture, mode, access int) blueprintEditRoute {
 	target := blueprintEditPageAt(selected, workload)
-	route := blueprintEditRoute{page: target}
-	route.returnToReview = target == projectNamePage || target == projectDescriptionPage || target == projectLocationPage || target == workloadPage || target == topologyPage || target == architecturePage || target == capabilityPage
+	route := blueprintEditRoute{page: target, returnToReview: target != editOptionsPage}
 	switch target {
 	case workloadPage:
 		route.selectedRow = selectedWorkload
@@ -88,6 +87,21 @@ func blueprintEditRouteAt(selected int, workload string, selectedWorkload, shape
 		route.selectedRow = access
 	}
 	return route
+}
+
+func prepareBlueprintEdit(route blueprintEditRoute, options *generationOptions, mode, provider *int, accessReturn *page, editingLocation *bool) {
+	switch route.page {
+	case projectLocationPage:
+		*editingLocation = true
+	case generationModePage:
+		*mode = route.selectedRow
+	case providerPage:
+		options.Mode = "agent"
+		*mode = generationModeIndex(*options)
+		*provider = providerIndex(options.Provider)
+	case accessModePage:
+		*accessReturn = summaryPage
+	}
 }
 
 // The create row edits defaults; a saved row edits that project's connection.

@@ -296,6 +296,9 @@ func runWithInitializer(initialize func() error) error {
 		}
 		event = normalizeEscape(event)
 		if handled, message := handleAccessModeInput(event.ID, &currentPage, accessReturnPage, list, &config, &providerConfig, agentSession, &generationRows, &pendingPermission); handled {
+			if currentPage == summaryPage {
+				editReturnSummary = false
+			}
 			validationMessage = message
 			continue
 		}
@@ -649,7 +652,7 @@ func runWithInitializer(initialize func() error) error {
 				followAgentActivity = list.SelectedRow == len(generationRows)-1
 			}
 		case "<Escape>", "b", "<Backspace>":
-			if editReturnSummary && (currentPage == workloadPage || currentPage == topologyPage || currentPage == architecturePage || currentPage == capabilityPage) {
+			if editReturnSummary && (currentPage == workloadPage || currentPage == topologyPage || currentPage == architecturePage || currentPage == capabilityPage || currentPage == generationModePage) {
 				editReturnSummary = false
 				currentPage = summaryPage
 				continue
@@ -696,6 +699,9 @@ func runWithInitializer(initialize func() error) error {
 					authResults = nil
 					authPending = false
 					validationMessage = "ChatGPT sign-in cancelled. Choose a provider or press Enter to retry."
+				} else if editReturnSummary {
+					editReturnSummary = false
+					currentPage = summaryPage
 				} else {
 					currentPage = generationModePage
 					if editingSettings {
@@ -729,20 +735,7 @@ func runWithInitializer(initialize func() error) error {
 			case editOptionsPage:
 				route := blueprintEditRouteAt(list.SelectedRow, workloadIDAt(selectedWorkload), selectedWorkload, selectedShape, selectedArchitecture, generationModeIndex(providerConfig), accessModeIndex(providerConfig.AccessMode))
 				editReturnSummary = route.returnToReview
-				if route.page == projectLocationPage {
-					editingLocationFromSummary = true
-				}
-				if route.page == providerPage {
-					providerConfig.Mode = "agent"
-					selectedMode = generationModeIndex(providerConfig)
-					selectedProvider = providerIndex(providerConfig.Provider)
-				}
-				if route.page == generationModePage {
-					selectedMode = route.selectedRow
-				}
-				if route.page == accessModePage {
-					accessReturnPage = summaryPage
-				}
+				prepareBlueprintEdit(route, &providerConfig, &selectedMode, &selectedProvider, &accessReturnPage, &editingLocationFromSummary)
 				list.SelectedRow = route.selectedRow
 				currentPage = route.page
 			case homePage:
@@ -836,6 +829,7 @@ func runWithInitializer(initialize func() error) error {
 				selectedMode = list.SelectedRow
 				if selectedMode == 0 {
 					providerConfig.Mode = "local"
+					editReturnSummary = false
 					currentPage = summaryPage
 				} else {
 					providerConfig.Mode = "agent"
