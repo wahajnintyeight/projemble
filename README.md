@@ -19,20 +19,22 @@ Or build from source with Go **1.25 or later**:
 ```sh
 git clone https://github.com/wahajnintyeight/projemble.git
 cd projemble
-go build -o projemble ./cmd/projemble
+mkdir -p dist
+go build -o dist/projemble ./cmd/projemble
 ```
 
 On Windows PowerShell, build and run the `.exe`:
 
 ```powershell
-go build -o projemble.exe ./cmd/projemble
-.\projemble.exe
+New-Item -ItemType Directory -Force dist | Out-Null
+go build -o dist/projemble.exe ./cmd/projemble
+.\dist\projemble.exe
 ```
 
 On macOS or Linux:
 
 ```sh
-./projemble
+./dist/projemble
 ```
 
 To start without building a binary, run `go run ./cmd/projemble` from the repository directory.
@@ -41,21 +43,28 @@ To start without building a binary, run `go run ./cmd/projemble` from the reposi
 
 1. Select **New project** and describe what you are building.
 2. Choose an existing parent directory for the project.
-3. Choose a **project shape** and architecture. Projemble shows a preview of the resulting blueprint.
-4. Choose **Local templates** for deterministic scaffolding with no account or API key, or **AI-assisted generation** to let a configured agent extend the scaffold.
-5. Review the project profile and create it.
+3. Choose a workload, optional application patterns, service topology when relevant, code architecture, and the Go stack.
+4. Add an optional supported database, or skip capabilities for a minimal scaffold. Planned integrations stay visible but cannot be selected yet.
+5. Choose **Scaffold only** for local generation, or add an agent to extend the scaffold.
+6. Review the project profile and create it.
 
 The project directory is created under the parent directory you chose. The TUI remembers your provider, model, and project location. Use `Up`/`Down` or `j`/`k` to move through choices, `Enter` to select, and `Esc` or `b` to go back.
 
-## Shapes and templates
+## Workloads, patterns, and capabilities
 
-The template choice follows the project shape and architecture; the architecture menu only shows options that fit.
+Workload, application pattern, service topology, architecture, and capabilities are separate profile choices. Patterns compose: for example, a RAG chatbot can run behind an API or in a worker. Architecture choices are filtered by workload.
 
-| Project shape | Architectures | Typical use |
+| Go workload | Architectures | Typical use |
 | --- | --- | --- |
-| Go monolith | Layered, Clean / Hexagonal, Domain-Driven Design | One deployable API or service |
-| Go microservices (`go-micro`) | Layered, Clean / Hexagonal, Domain-Driven Design | Services that communicate with each other |
-| Go one-shot job | Pipeline | Scraping, ETL, imports, and maintenance jobs that run and exit |
+| HTTP API | Layered, Clean / Hexagonal, Domain-Driven Design | Monolith or `go-micro` services |
+| CLI tool | Layered | Command-line programs |
+| One-shot job or pipeline | Pipeline | Scraping, ETL, imports, and maintenance |
+| Background worker | Layered | Long-running work loops |
+| Go library | Clean / Hexagonal | Reusable package |
+
+Standard backend, RAG, agent, and chatbot patterns generate focused application boundaries and compose with any workload. SQLite, PostgreSQL, MySQL/MariaDB, and MongoDB are the first verified database integrations. The catalog also lists planned databases, queues, caches, search, analytics, graph, vector, object storage, operations, and delivery options; planned entries become selectable only after their generators are verified.
+
+Go is the only selectable implementation stack in this rollout. Node.js, NestJS, Laravel, and PHP appear as planned choices until their scaffold generators are verified.
 
 ## Optional agent
 
@@ -72,7 +81,15 @@ go run ./cmd/projemble project agent \
   --task "Review the project structure and add health checks."
 ```
 
-Supported providers: OpenAI, Claude, DeepSeek, Mistral, Qwen, OpenRouter, Hugging Face, Gemini, and ChatGPT sign-in (`openai-web`). The agent can inspect and edit project files and run fixed Go checks (`go test`, `go vet`, and `go build`).
+Supported providers: OpenAI, Claude, DeepSeek, Mistral, Qwen, OpenRouter, Hugging Face, Gemini, and ChatGPT sign-in (`openai-web`). The agent can inspect and edit project files, run fixed Go checks (`go test`, `go vet`, and `go build`), launch a one-shot Go app with separate runtime arguments, and run shell commands. Process output streams into the activity feed. Commands time out after three minutes; a turn can start up to three Go app runs and three shell commands. Long-running server sessions are not supported.
+
+Choose the agent access policy with `F6` in the project builder or agent workspace. The choice is saved as `agent_access_mode` in the local YAML config and reused across projects:
+
+- `read-only`: list and read files under the project; edits and commands are blocked.
+- `full-access`: edit project files and run fixed Go commands; each arbitrary shell command still needs approval.
+- `ask-always` (default): approve each file read, edit, or command before that one action runs. `Esc` denies the pending action.
+
+File tools and fixed Go commands enforce project-relative paths. A shell command starts in the project directory, but the operating system does not sandbox it there; explicitly invoked shell commands can access other paths. Projemble therefore requests approval for every arbitrary shell command, including in full-access mode.
 
 In the agent workspace, press `Enter` to send, `Ctrl+J` for a new line, `Ctrl+B` to show or hide the session panel, `Ctrl+L` to redraw a broken or misaligned view, `F3` to change provider, `F4` to change model, and `PageUp`/`PageDown` to review the conversation. The `Ctrl+L` refresh is also available during onboarding.
 
@@ -106,3 +123,7 @@ go test ./...
 go build ./...
 go vet ./...
 ```
+
+## Release builds
+
+Native binaries belong in `dist/`. Tag-triggered GitHub releases use GoReleaser to publish Windows, Linux, and macOS archives for amd64 and arm64, plus `SHA256SUMS.txt` checksums.

@@ -38,6 +38,8 @@ func (workspace *agentWorkspace) Handle(event ui.Event, busy bool) workspaceActi
 		return workspaceAction{model: true}
 	case "<F5>":
 		return workspaceAction{thinking: true}
+	case "<F6>":
+		return workspaceAction{access: true}
 	case "<C-o>":
 		workspace.details = !workspace.details
 		return workspaceAction{}

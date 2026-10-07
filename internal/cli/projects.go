@@ -77,18 +77,28 @@ func runAgent(args []string, stdout, stderr io.Writer) error {
 	if strings.TrimSpace(*keyEnv) == "" && provider != llm.OpenAIWeb {
 		return errors.New("--api-key-env must name an environment variable")
 	}
+	saved, err := projectstore.LoadDefault()
+	if err != nil {
+		return fmt.Errorf("load saved Projemble settings: %w", err)
+	}
 	key := ""
 	if *keyEnv != "" {
 		key = os.Getenv(*keyEnv)
 	}
 	if key == "" && provider != llm.OpenAIWeb {
-		saved, err := projectstore.LoadDefault()
-		if err != nil {
-			return fmt.Errorf("load saved provider key: %w", err)
-		}
 		key = saved.ProviderKeys[string(provider)]
 	}
-	config := agent.Config{ProviderID: provider, BaseURL: *baseURL, Model: *model, APIKey: key, SecretEnvName: *keyEnv}
+	config := agent.Config{ProviderID: provider, BaseURL: *baseURL, Model: *model, APIKey: key, SecretEnvName: *keyEnv, AccessMode: agent.AccessMode(saved.AgentAccessMode), Approver: newTerminalPermissionApprover(os.Stdin, stdout)}
+	if target, err := filepath.Abs(*path); err == nil {
+		for _, project := range saved.Projects {
+			profilePath, pathErr := filepath.Abs(project.Path)
+			if pathErr == nil && filepath.Clean(profilePath) == filepath.Clean(target) {
+				project = projectstore.NormalizeProject(project)
+				config.Profile = agent.ProfileContext{Workload: project.WorkloadID, Topology: project.TopologyID, Architecture: project.ArchitectureID, Patterns: project.PatternIDs, Capabilities: project.Capabilities}
+				break
+			}
+		}
+	}
 	if provider == llm.OpenAIWeb {
 		config.Credentials = &auth.ChatGPTTokenSource{}
 	}

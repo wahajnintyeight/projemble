@@ -16,13 +16,20 @@ const (
 	projectNamePage
 	projectDescriptionPage
 	projectLocationPage
+	workloadPage
+	patternPage
+	topologyPage
 	appShapePage
 	architecturePage
+	stackPage
+	capabilityPage
 	summaryPage
 	agentProgressPage
 	savedPage
 	homePage
 	repairPathPage
+	accessModePage
+	approvalPage
 )
 
 const (
@@ -50,7 +57,7 @@ func homeProviderSelection(config projectstore.Config, selected int) (generation
 	}
 	project := config.Projects[selected-1]
 	if project.GenerationMode == "agent" {
-		options = generationOptions{Mode: "agent", Provider: llm.ProviderID(project.AIProvider), Model: project.AIModel, ReasoningEffort: llm.ReasoningEffort(project.ReasoningEffort)}
+		options = generationOptions{Mode: "agent", AccessMode: options.AccessMode, Provider: llm.ProviderID(project.AIProvider), Model: project.AIModel, ReasoningEffort: llm.ReasoningEffort(project.ReasoningEffort)}
 		options.APIKey = rememberedKey(options.Provider, config)
 	}
 	return options, &project
@@ -61,6 +68,9 @@ func saveGenerationSelection(config *projectstore.Config, options generationOpti
 	next := *config
 	next.Projects = append([]projectstore.Project(nil), config.Projects...)
 	next.Generation = projectstore.GenerationDefaults{Mode: "agent", Provider: string(options.Provider), Model: options.Model, ReasoningEffort: string(options.ReasoningEffort)}
+	if options.AccessMode != "" {
+		next.AgentAccessMode = options.AccessMode
+	}
 	if project != nil {
 		updated := *project
 		updated.GenerationMode, updated.AIProvider, updated.AIModel, updated.ReasoningEffort = "agent", string(options.Provider), options.Model, string(options.ReasoningEffort)

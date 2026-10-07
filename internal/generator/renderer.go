@@ -27,19 +27,25 @@ func (serviceTemplateRenderer) Files(project projectstore.Project, template cata
 
 func baseProjectFiles(project projectstore.Project, template catalog.Template, module string) map[string]string {
 	return map[string]string{
-		"go.mod":     goMod(module, template),
+		"go.mod":     goModForProject(project, module, template),
 		"README.md":  readme(project, template, module),
-		".gitignore": "/bin/\n",
+		".gitignore": "/bin/\n*.db\n.env\n",
 	}
 }
 
 func rendererFor(template catalog.Template) (templateRenderer, error) {
-	switch template.AppShapeID {
-	case catalog.ShapeMonolith, catalog.ShapeMicroservices:
+	switch template.WorkloadID {
+	case catalog.WorkloadHTTPAPI:
 		return serviceTemplateRenderer{}, nil
-	case catalog.ShapeOneShotJob:
+	case catalog.WorkloadOneShot:
 		return oneShotJobRenderer{}, nil
+	case catalog.WorkloadCLI:
+		return cliRenderer{}, nil
+	case catalog.WorkloadWorker:
+		return workerRenderer{}, nil
+	case catalog.WorkloadLibrary:
+		return libraryRenderer{}, nil
 	default:
-		return nil, fmt.Errorf("no renderer for application shape %q", template.AppShapeID)
+		return nil, fmt.Errorf("no renderer for workload %q", template.WorkloadID)
 	}
 }

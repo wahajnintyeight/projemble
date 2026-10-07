@@ -121,7 +121,7 @@ func borderedMessages(rows []string, width int) []string {
 		case strings.Contains(row, "[AGENT](fg:"):
 			flush()
 			speaker = "AGENT"
-		case strings.HasPrefix(row, "[THINK]") || strings.HasPrefix(row, "[READ]") || strings.HasPrefix(row, "[CHECK]") || strings.HasPrefix(row, "[ERROR]") || strings.HasPrefix(row, "[EDIT]") || strings.HasPrefix(row, "[PASS]") || strings.HasPrefix(row, "[AI]") || strings.HasPrefix(row, "[+") || strings.HasPrefix(row, "[~]") || strings.HasPrefix(row, "[-]"):
+		case isActivityRow(row):
 			flush()
 			result = append(result, row)
 		default:
@@ -134,6 +134,18 @@ func borderedMessages(rows []string, width int) []string {
 	}
 	flush()
 	return result
+}
+
+func isActivityRow(row string) bool {
+	for _, prefix := range []string{
+		"[... think]", "[> read]", "[> list]", "[> write]", "[> remove]", "[> run]", "[> call]",
+		"[read]", "[+ ", "[~ ", "[- ", "[! failed]", "[· out]", "[· err]", "[ok]", "[· note]", "[· skipped]",
+	} {
+		if strings.HasPrefix(row, prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 func wrapTranscriptCells(cells []ui.Cell, width int) [][]ui.Cell {
@@ -174,8 +186,29 @@ func wrapTranscriptCells(cells []ui.Cell, width int) [][]ui.Cell {
 	return lines
 }
 
-func activityCounts(reads, checks, output int) string {
-	return fmt.Sprintf(" · %d reads · %d checks · %d output lines · Ctrl+O expand", reads, checks, output)
+func activityCounts(reads, checks, waits, output int) string {
+	var counts []string
+	if reads > 0 {
+		counts = append(counts, pluralCount(reads, "read"))
+	}
+	if checks > 0 {
+		counts = append(counts, pluralCount(checks, "check"))
+	}
+	if waits > 0 {
+		counts = append(counts, pluralCount(waits, "model request"))
+	}
+	if output > 0 {
+		counts = append(counts, pluralCount(output, "output line"))
+	}
+	counts = append(counts, "Ctrl+O expand")
+	return " · " + strings.Join(counts, " · ")
+}
+
+func pluralCount(count int, singular string) string {
+	if count == 1 {
+		return fmt.Sprintf("1 %s", singular)
+	}
+	return fmt.Sprintf("%d %ss", count, singular)
 }
 
 func (v *transcriptView) bottom() int    { return max(0, len(v.lines)-v.Inner.Dy()) }
@@ -216,38 +249,46 @@ func conversationRows(rows []string, details bool) []string {
 		if reads+checks+waits+output == 0 {
 			return
 		}
-		out = append(out, "", styledMarkdown("Activity", "fg:cyan,mod:bold")+
-			activityCounts(reads, checks, output), last, "")
+		out = append(out, styledMarkdown("Agent activity", "fg:cyan,mod:bold")+
+			activityCounts(reads, checks, waits, output), last)
 		reads, checks, waits, output = 0, 0, 0, 0
 		last = ""
 	}
 	activity := false
 	for _, row := range rows {
 		switch {
-		case strings.HasPrefix(row, "[READ]"):
+		case strings.HasPrefix(row, "[> read]") || strings.HasPrefix(row, "[> list]"):
 			activity = true
-			if strings.Contains(row, "Action:") {
-				reads++
-			}
+			reads++
 			last = row
-		case strings.HasPrefix(row, "[CHECK]"):
+		case strings.HasPrefix(row, "[> run]"):
 			activity = true
 			checks++
 			last = row
-		case strings.HasPrefix(row, "[THINK]"):
+		case strings.HasPrefix(row, "[... think]"):
 			activity = true
 			waits++
 			last = row
+		case strings.HasPrefix(row, "[read]"):
+			if activity {
+				output++
+				last = row
+			} else {
+				out = append(out, row)
+			}
+		case strings.HasPrefix(row, "[· out]") || strings.HasPrefix(row, "[· err]"):
+			if activity {
+				output++
+			} else {
+				out = append(out, row)
+			}
 		case strings.HasPrefix(row, "[AGENT]") || strings.HasPrefix(row, "[YOU]"):
 			flush()
 			activity = false
 			out = append(out, row)
-		case strings.HasPrefix(row, "[ERROR]") || strings.HasPrefix(row, "[EDIT]") ||
-			strings.HasPrefix(row, "[+]") || strings.HasPrefix(row, "[~]") ||
-			strings.HasPrefix(row, "[-]") || strings.HasPrefix(row, "[PASS]") ||
-			strings.HasPrefix(row, "[SAVE]") || strings.HasPrefix(row, "[NOTE]") ||
-			strings.HasPrefix(row, "[AI]"):
+		case isActivityRow(row):
 			flush()
+			activity = false
 			out = append(out, row)
 		default:
 			if activity && row != "" {

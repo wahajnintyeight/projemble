@@ -20,28 +20,13 @@ func TestGenerateEveryCatalogTemplate(t *testing.T) {
 			if err := Generate(project); err != nil {
 				t.Fatal(err)
 			}
-			applicationFile := "internal/service/service.go"
-			switch {
-			case template.AppShapeID == catalog.ShapeOneShotJob:
-				applicationFile = "internal/job/pipeline.go"
-			case template.ArchitectureID == catalog.ArchitectureClean:
-				applicationFile = "internal/application/service.go"
-			case template.ArchitectureID == catalog.ArchitectureDDD:
-				applicationFile = "internal/greetings/application/service.go"
-			}
-			entrypoint := "cmd/server/main.go"
-			if template.AppShapeID == catalog.ShapeOneShotJob {
-				entrypoint = "cmd/job/main.go"
-			}
-			for _, name := range []string{"README.md", "go.mod", entrypoint, applicationFile} {
+			entrypoint, source := generatedPaths(template)
+			for _, name := range []string{"README.md", "go.mod", entrypoint, source} {
 				if _, err := os.Stat(filepath.Join(root, filepath.FromSlash(name))); err != nil {
 					t.Errorf("generated file %s missing: %v", name, err)
 				}
 			}
-			mainPath := filepath.Join(root, "cmd", "server", "main.go")
-			if template.AppShapeID == catalog.ShapeOneShotJob {
-				mainPath = filepath.Join(root, "cmd", "job", "main.go")
-			}
+			mainPath := filepath.Join(root, filepath.FromSlash(entrypoint))
 			mainSource, err := os.ReadFile(mainPath)
 			if err != nil {
 				t.Fatal(err)
@@ -60,8 +45,8 @@ func TestGenerateEveryCatalogTemplate(t *testing.T) {
 			if template.AppShapeID == catalog.ShapeOneShotJob && !strings.Contains(string(mainSource), "NewPipeline") {
 				t.Error("one-shot template does not run a pipeline")
 			}
-			if err := runGo(root, "test", "./..."); err != nil {
-				t.Fatalf("generated starter does not compile: %v", err)
+			if err := verifyGenerated(root); err != nil {
+				t.Fatalf("generated starter verification: %v", err)
 			}
 			if template.AppShapeID == catalog.ShapeOneShotJob {
 				if err := runGo(root, "run", "./cmd/job"); err != nil {
@@ -73,6 +58,67 @@ func TestGenerateEveryCatalogTemplate(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestGenerateSupportedDatabaseAndPatternCombinations(t *testing.T) {
+	for _, capability := range catalog.SupportedCapabilities("Primary database") {
+		t.Run(capability.ID, func(t *testing.T) {
+			root := t.TempDir()
+			project := projectstore.Project{Name: "sample-app", Path: root, TemplateID: catalog.TemplateGoMonolithLayered, Capabilities: []string{capability.ID}}
+			if err := Generate(project); err != nil {
+				t.Fatal(err)
+			}
+			if err := runGo(root, "mod", "tidy"); err != nil {
+				t.Fatalf("tidy generated module: %v", err)
+			}
+			if err := verifyGenerated(root); err != nil {
+				t.Fatalf("verify generated module: %v", err)
+			}
+		})
+	}
+	t.Run("composed-patterns", func(t *testing.T) {
+		root := t.TempDir()
+		project := projectstore.Project{Name: "sample-app", Path: root, TemplateID: catalog.TemplateGoMonolithLayered, PatternIDs: []string{catalog.PatternBackend, catalog.PatternRAG, catalog.PatternAgent, catalog.PatternChatbot}, Capabilities: []string{catalog.CapabilitySQLite}}
+		if err := Generate(project); err != nil {
+			t.Fatal(err)
+		}
+		if err := runGo(root, "mod", "tidy"); err != nil {
+			t.Fatalf("tidy generated module: %v", err)
+		}
+		if err := verifyGenerated(root); err != nil {
+			t.Fatalf("verify generated patterns: %v", err)
+		}
+	})
+}
+
+func generatedPaths(template catalog.Template) (string, string) {
+	switch template.WorkloadID {
+	case catalog.WorkloadOneShot:
+		return "cmd/job/main.go", "internal/job/pipeline.go"
+	case catalog.WorkloadCLI:
+		return "cmd/cli/main.go", "cmd/cli/main.go"
+	case catalog.WorkloadWorker:
+		return "cmd/worker/main.go", "cmd/worker/main.go"
+	case catalog.WorkloadLibrary:
+		return "greeting.go", "greeting_test.go"
+	default:
+		if template.ArchitectureID == catalog.ArchitectureClean {
+			return "cmd/server/main.go", "internal/application/service.go"
+		}
+		if template.ArchitectureID == catalog.ArchitectureDDD {
+			return "cmd/server/main.go", "internal/greetings/application/service.go"
+		}
+		return "cmd/server/main.go", "internal/service/service.go"
+	}
+}
+
+func verifyGenerated(root string) error {
+	for _, check := range [][]string{{"test", "./..."}, {"vet", "./..."}, {"build", "./..."}} {
+		if err := runGo(root, check...); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func runGo(dir string, args ...string) error {

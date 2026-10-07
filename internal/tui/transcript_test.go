@@ -51,13 +51,16 @@ func TestCompactActivityRetainsChangesErrorsAndExpandableOutput(t *testing.T) {
 		rows = appendActivity(rows, event)
 	}
 	compact := visibleStyledText(strings.Join(conversationRows(rows, false), "\n"))
-	for _, want := range []string{"YOU", "fix it", "Updated main.go", "build failed", "Done", "Fixed main.go", "Ctrl+O expand"} {
+	for _, want := range []string{"YOU", "fix it", "updated main.go", "failed", "build", "Done", "Fixed main.go", "Agent activity", "Ctrl+O expand"} {
 		if !strings.Contains(compact, want) {
 			t.Fatalf("missing %q: %s", want, compact)
 		}
 	}
 	if strings.Contains(compact, "verbose output") {
 		t.Fatal("command payload not folded")
+	}
+	if strings.Contains(compact, "Action:") || strings.Contains(compact, "Command failed:") {
+		t.Fatalf("agent event labels still look like raw messages: %s", compact)
 	}
 	full := visibleStyledText(strings.Join(conversationRows(rows, true), "\n"))
 	if !strings.Contains(full, "verbose output") {
@@ -101,6 +104,14 @@ func TestMessageFramesDistinguishSpeakersAndPreserveFormatting(t *testing.T) {
 	}
 	if formatted[userStart][0].Style.Fg == formatted[agentStart][0].Style.Fg {
 		t.Fatal("speaker frames do not use distinct colors")
+	}
+}
+
+func TestAgentActionsStayOutsideSpeakerMessageFrames(t *testing.T) {
+	rows := appendActivity(nil, "Action: Writing internal/app.go")
+	formatted := borderedMessages(rows, 32)
+	if len(formatted) != 1 || !strings.HasPrefix(formatted[0], "[> write]") {
+		t.Fatalf("agent action should render as a standalone event row: %#v", formatted)
 	}
 }
 

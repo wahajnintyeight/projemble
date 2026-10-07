@@ -20,6 +20,8 @@ type generationUpdate struct {
 	project    string
 	configPath string
 	session    *agent.Agent
+	permission *agent.PermissionRequest
+	decision   chan bool
 	usage      llm.Usage
 	hasUsage   bool
 	err        error
@@ -48,6 +50,22 @@ func (reporter *generationReporter) ReportUsage(usage llm.Usage) {
 	select {
 	case reporter.updates <- generationUpdate{usage: usage, hasUsage: true}:
 	case <-reporter.ctx.Done():
+	}
+}
+
+func (reporter *generationReporter) RequestPermission(ctx context.Context, request agent.PermissionRequest) (bool, error) {
+	decision := make(chan bool, 1)
+	requestCopy := request
+	select {
+	case reporter.updates <- generationUpdate{permission: &requestCopy, decision: decision}:
+	case <-ctx.Done():
+		return false, ctx.Err()
+	}
+	select {
+	case approved := <-decision:
+		return approved, nil
+	case <-ctx.Done():
+		return false, ctx.Err()
 	}
 }
 
@@ -131,39 +149,103 @@ func assistantSummary(line string) (string, bool) {
 }
 
 func colorActivity(line string) string {
-	marker, color := "", ""
+	label, detail, color := "", "", ""
 	switch {
 	case strings.HasPrefix(line, "Waiting on "):
-		marker, color = "THINK", colorThinking
+		label, color = "... think", colorThinking
+		detail = strings.TrimPrefix(line, "Waiting on ")
+		detail = strings.Replace(detail, " model ", " · ", 1)
+		detail = strings.Replace(detail, " (request ", " · request ", 1)
+		detail = strings.TrimSuffix(detail, ")")
+	case strings.HasPrefix(line, "STDOUT "):
+		label, color = "· out", colorRead
+		detail = strings.TrimPrefix(line, "STDOUT ")
+	case strings.HasPrefix(line, "STDERR "):
+		label, color = "· err", colorError
+		detail = strings.TrimPrefix(line, "STDERR ")
 	case strings.HasPrefix(line, "You:") || strings.HasPrefix(line, "You (queued):"):
-		marker, color = "YOU", colorUser
-	case strings.Contains(line, "failed") || strings.Contains(line, "error:") || strings.HasPrefix(line, "Generation failed:"):
-		marker, color = "ERROR", colorError
-	case strings.HasPrefix(line, "Action: Reading ") || strings.HasPrefix(line, "Action: Listing ") || strings.HasPrefix(line, "Read ") || strings.HasPrefix(line, "Listed "):
-		marker, color = "READ", colorRead
-	case strings.HasPrefix(line, "Action: Writing "):
-		marker, color = "EDIT", colorChanged
-	case strings.HasPrefix(line, "Created ") || strings.HasPrefix(line, "Project created:"):
-		marker, color = "+", colorAdded
-	case strings.HasPrefix(line, "Updated ") || strings.HasPrefix(line, "Modified "):
-		marker, color = "~", colorChanged
-	case strings.HasPrefix(line, "Removed ") || strings.HasPrefix(line, "Deleted ") || strings.HasPrefix(line, "Action: Removing "):
-		marker, color = "-", colorRemoved
+		label, color = "YOU", colorUser
+		detail = strings.TrimPrefix(strings.TrimPrefix(line, "You (queued):"), "You:")
+	case strings.HasPrefix(line, "Command failed:") || strings.HasPrefix(line, "Generation failed:") ||
+		strings.HasPrefix(line, "Provider request failed:") || strings.Contains(strings.ToLower(line), "tool error:") ||
+		strings.Contains(strings.ToLower(line), " failed") || strings.Contains(strings.ToLower(line), "error:"):
+		label, color = "! failed", colorError
+		detail = failureDetail(line)
+	case strings.HasPrefix(line, "Action: Reading ") || strings.HasPrefix(line, "Reading "):
+		label, color = "> read", colorRead
+		detail = strings.TrimPrefix(strings.TrimPrefix(line, "Action: "), "Reading ")
+	case strings.HasPrefix(line, "Action: Listing ") || strings.HasPrefix(line, "Listing "):
+		label, color = "> list", colorRead
+		detail = strings.TrimPrefix(strings.TrimPrefix(line, "Action: "), "Listing ")
+	case strings.HasPrefix(line, "Action: Writing ") || strings.HasPrefix(line, "Writing "):
+		label, color = "> write", colorChanged
+		detail = strings.TrimPrefix(strings.TrimPrefix(line, "Action: "), "Writing ")
+	case strings.HasPrefix(line, "Action: Removing ") || strings.HasPrefix(line, "Removing "):
+		label, color = "> remove", colorRemoved
+		detail = strings.TrimPrefix(strings.TrimPrefix(line, "Action: "), "Removing ")
 	case strings.HasPrefix(line, "Action: Running ") || strings.HasPrefix(line, "Running "):
-		marker, color = "CHECK", colorCheck
-	case strings.Contains(line, " passed") || strings.HasSuffix(line, " passed") || strings.HasPrefix(line, "Ready for "):
-		marker, color = "PASS", colorAdded
-	case strings.HasPrefix(line, "Agent summary:") || strings.HasPrefix(line, "Starting next queued"):
-		marker, color = "AI", colorThinking
+		label, color = "> run", colorCheck
+		detail = strings.TrimPrefix(strings.TrimPrefix(line, "Action: "), "Running ")
+	case strings.HasPrefix(line, "Action: Calling "):
+		label, color = "> call", colorRead
+		detail = strings.TrimPrefix(line, "Action: Calling ")
+	case strings.HasPrefix(line, "Read "):
+		label, color = "read", colorRead
+		detail = strings.TrimPrefix(line, "Read ")
+	case strings.HasPrefix(line, "Listed "):
+		label, color = "read", colorRead
+		detail = strings.TrimPrefix(line, "Listed ")
+	case strings.HasPrefix(line, "Created ") || strings.HasPrefix(line, "Project created:"):
+		label, color = "+ created", colorAdded
+		detail = strings.TrimPrefix(strings.TrimPrefix(line, "Project created:"), "Created ")
+	case strings.HasPrefix(line, "Updated ") || strings.HasPrefix(line, "Modified "):
+		label, color = "~ updated", colorChanged
+		detail = strings.TrimPrefix(strings.TrimPrefix(line, "Updated "), "Modified ")
+	case strings.HasPrefix(line, "Removed ") || strings.HasPrefix(line, "Deleted "):
+		label, color = "- removed", colorRemoved
+		detail = strings.TrimPrefix(strings.TrimPrefix(strings.TrimPrefix(line, "Removed "), "Deleted "), "Action: Removing ")
+	case strings.HasPrefix(line, "Command completed:"):
+		label, color = "ok", colorAdded
+		detail = strings.TrimPrefix(line, "Command completed:")
+	case strings.Contains(line, " passed") || strings.HasSuffix(line, " passed"):
+		label, color = "ok", colorAdded
+		detail = strings.TrimSuffix(line, " passed")
+	case strings.HasPrefix(line, "Ready for "):
+		label, color = "ok", colorAdded
+		detail = "ready for your next instruction"
+	case strings.HasPrefix(line, "Starting next queued"):
+		label, color = "· note", colorThinking
+		detail = "starting next queued instruction"
 	case strings.HasPrefix(line, "Cancellation requested") || strings.HasPrefix(line, "Cleared "):
-		marker, color = "NOTE", colorChanged
+		label, color = "· note", colorChanged
+		detail = line
+	case strings.HasPrefix(line, "Command skipped:"):
+		label, color = "· skipped", colorChanged
+		detail = strings.TrimPrefix(line, "Command skipped:")
 	case strings.HasPrefix(line, "Profile saved:"):
-		marker, color = "SAVE", colorRead
+		label, color = "+ saved", colorAdded
+		detail = strings.TrimPrefix(line, "Profile saved:")
 	}
-	if marker == "" {
+	if label == "" {
 		return line
 	}
-	return "[" + marker + "](fg:" + color + ",mod:bold) " + line
+	row := styledMarkdown(label, "fg:"+color+",mod:bold")
+	if detail != "" {
+		row += styledMarkdown(" "+strings.TrimSpace(detail), "")
+	}
+	return row
+}
+
+func failureDetail(line string) string {
+	for _, prefix := range []string{"Command failed:", "Generation failed:", "Provider request failed:", "tool error:"} {
+		if strings.HasPrefix(strings.ToLower(line), strings.ToLower(prefix)) {
+			line = strings.TrimSpace(line[len(prefix):])
+			break
+		}
+	}
+	line = strings.Replace(line, " failed: ", " · ", 1)
+	line = strings.TrimSuffix(line, " failed")
+	return line
 }
 
 func cleanActivity(line string) string {

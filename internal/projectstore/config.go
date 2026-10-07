@@ -26,6 +26,7 @@ type Config struct {
 	LastProjectID   string             `yaml:"last_project_id,omitempty"`
 	ParentDirectory string             `yaml:"parent_directory,omitempty"`
 	Version         int                `yaml:"version"`
+	AgentAccessMode string             `yaml:"agent_access_mode,omitempty"`
 	Generation      GenerationDefaults `yaml:"generation,omitempty"`
 	ProviderKeys    map[string]string  `yaml:"provider_keys,omitempty"`
 	Projects        []Project          `yaml:"projects"`
@@ -46,8 +47,12 @@ type Project struct {
 	Path            string            `yaml:"path"`
 	StackID         string            `yaml:"stack"`
 	AppShapeID      string            `yaml:"app_shape"`
+	WorkloadID      string            `yaml:"workload,omitempty"`
+	TopologyID      string            `yaml:"topology,omitempty"`
 	ArchitectureID  string            `yaml:"architecture"`
 	TemplateID      string            `yaml:"template"`
+	PatternIDs      []string          `yaml:"patterns,omitempty"`
+	Capabilities    []string          `yaml:"capabilities,omitempty"`
 	GenerationMode  string            `yaml:"generation_mode,omitempty"`
 	AIProvider      string            `yaml:"ai_provider,omitempty"`
 	AIModel         string            `yaml:"ai_model,omitempty"`
@@ -119,6 +124,9 @@ func Load(path string) (Config, error) {
 	if config.Projects == nil {
 		config.Projects = []Project{}
 	}
+	for i := range config.Projects {
+		config.Projects[i] = NormalizeProject(config.Projects[i])
+	}
 	if err := config.Validate(); err != nil {
 		return Config{}, fmt.Errorf("validate config %q: %w", path, err)
 	}
@@ -181,6 +189,7 @@ func writeReplace(path string, data []byte) error {
 }
 
 func (config *Config) Upsert(project Project) error {
+	project = NormalizeProject(project)
 	now := time.Now().UTC().Format(time.RFC3339)
 	if project.ID == "" {
 		for _, existing := range config.Projects {
@@ -222,6 +231,34 @@ func (config *Config) Upsert(project Project) error {
 	return config.Validate()
 }
 
+// NormalizeProject fills fields added after config v1 using its stable template ID.
+func NormalizeProject(project Project) Project {
+	if template, ok := catalog.TemplateByID(project.TemplateID); ok {
+		if project.StackID == "" {
+			project.StackID = template.StackID
+		}
+		if project.AppShapeID == "" {
+			project.AppShapeID = template.AppShapeID
+		}
+		if project.WorkloadID == "" {
+			project.WorkloadID = template.WorkloadID
+		}
+		if project.TopologyID == "" {
+			project.TopologyID = template.TopologyID
+		}
+		if project.ArchitectureID == "" {
+			project.ArchitectureID = template.ArchitectureID
+		}
+	}
+	if project.PatternIDs == nil {
+		project.PatternIDs = []string{}
+	}
+	if project.Capabilities == nil {
+		project.Capabilities = []string{}
+	}
+	return project
+}
+
 func (config Config) Validate() error {
 	if config.Version != currentVersion {
 		return fmt.Errorf("unsupported config version %d", config.Version)
@@ -232,11 +269,15 @@ func (config Config) Validate() error {
 	if config.Generation.Mode == "agent" && (strings.TrimSpace(config.Generation.Provider) == "" || strings.TrimSpace(config.Generation.Model) == "") {
 		return errors.New("default AI provider and model are required for agent generation")
 	}
+	if config.AgentAccessMode != "" && config.AgentAccessMode != "read-only" && config.AgentAccessMode != "full-access" && config.AgentAccessMode != "ask-always" {
+		return fmt.Errorf("unknown agent access mode %q", config.AgentAccessMode)
+	}
 	if !validReasoningEffort(config.Generation.ReasoningEffort) {
 		return fmt.Errorf("unknown reasoning effort %q", config.Generation.ReasoningEffort)
 	}
 	seen := make(map[string]struct{}, len(config.Projects))
 	for i, project := range config.Projects {
+		project = NormalizeProject(project)
 		prefix := fmt.Sprintf("projects[%d]", i)
 		if strings.TrimSpace(project.ID) == "" {
 			return fmt.Errorf("%s: id is required", prefix)
@@ -260,8 +301,39 @@ func (config Config) Validate() error {
 		}
 		if project.StackID != template.StackID ||
 			project.AppShapeID != template.AppShapeID ||
+			project.WorkloadID != template.WorkloadID ||
+			project.TopologyID != template.TopologyID ||
 			project.ArchitectureID != template.ArchitectureID {
-			return fmt.Errorf("%s: stack, app shape, and architecture must match template %q", prefix, project.TemplateID)
+			return fmt.Errorf("%s: stack, workload, topology, app shape, and architecture must match template %q", prefix, project.TemplateID)
+		}
+		patterns := make(map[string]struct{}, len(project.PatternIDs))
+		for _, id := range project.PatternIDs {
+			if _, ok := catalog.PatternByID(id); !ok {
+				return fmt.Errorf("%s: unknown application pattern %q", prefix, id)
+			}
+			if _, exists := patterns[id]; exists {
+				return fmt.Errorf("%s: duplicate application pattern %q", prefix, id)
+			}
+			patterns[id] = struct{}{}
+		}
+		capabilities := make(map[string]struct{}, len(project.Capabilities))
+		primaryDatabase := false
+		for _, id := range project.Capabilities {
+			capability, ok := catalog.CapabilityByID(id)
+			if !ok {
+				return fmt.Errorf("%s: unknown capability %q", prefix, id)
+			}
+			if !capability.Supported {
+				return fmt.Errorf("%s: capability %q is planned but not supported yet", prefix, id)
+			}
+			if _, exists := capabilities[id]; exists {
+				return fmt.Errorf("%s: duplicate capability %q", prefix, id)
+			}
+			if capability.Category == "Primary database" && primaryDatabase {
+				return fmt.Errorf("%s: choose at most one primary database", prefix)
+			}
+			primaryDatabase = primaryDatabase || capability.Category == "Primary database"
+			capabilities[id] = struct{}{}
 		}
 		if project.GenerationMode != "" && project.GenerationMode != "local" && project.GenerationMode != "agent" {
 			return fmt.Errorf("%s: unknown generation mode %q", prefix, project.GenerationMode)

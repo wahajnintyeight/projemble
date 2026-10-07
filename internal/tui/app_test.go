@@ -41,8 +41,8 @@ func TestWizardInputValidationAndNavigation(t *testing.T) {
 		t.Fatalf("valid project name: advance=%v quit=%v message=%q next=%v", advance, quit, message, nextPage)
 	}
 	advance, quit, message = handleTextInput(ui.Event{ID: "<Enter>"}, projectDescriptionPage, nameInput, descriptionInput, locationInput, keyInput, modelInput, &nextPage)
-	if advance || quit || message == "" {
-		t.Fatalf("empty description: advance=%v quit=%v message=%q", advance, quit, message)
+	if !advance || quit || message != "" || nextPage != projectLocationPage {
+		t.Fatalf("empty optional description: advance=%v quit=%v message=%q next=%v", advance, quit, message, nextPage)
 	}
 	descriptionInput.Text = "Tracks stock levels"
 	descriptionInput.Cursor = len(descriptionInput.Text)
@@ -52,7 +52,7 @@ func TestWizardInputValidationAndNavigation(t *testing.T) {
 	}
 	locationInput.Text = t.TempDir()
 	advance, quit, message = handleTextInput(ui.Event{ID: "<Enter>"}, projectLocationPage, nameInput, descriptionInput, locationInput, keyInput, modelInput, &nextPage)
-	if !advance || quit || message != "" || nextPage != appShapePage {
+	if !advance || quit || message != "" || nextPage != workloadPage {
 		t.Fatalf("valid project location: advance=%v quit=%v message=%q next=%v", advance, quit, message, nextPage)
 	}
 }
@@ -167,6 +167,38 @@ func TestInitialGenerationOptionsLoadsSavedDefaults(t *testing.T) {
 	}
 }
 
+func TestAccessModeSelectionPersistsAndApprovalIsOneShot(t *testing.T) {
+	t.Setenv("APPDATA", t.TempDir())
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	config := projectstore.NewConfig()
+	options := generationOptions{AccessMode: "ask-always"}
+	list := widgets.NewList()
+	list.SelectedRow = 0
+	current, returnTo := accessModePage, summaryPage
+	var rows []string
+	var pending *generationUpdate
+	handled, message := handleAccessModeInput("<Enter>", &current, returnTo, list, &config, &options, nil, &rows, &pending)
+	if !handled || message != "" || current != summaryPage || options.AccessMode != "read-only" {
+		t.Fatalf("access mode selection: handled=%v message=%q page=%v options=%+v", handled, message, current, options)
+	}
+	saved, err := projectstore.LoadDefault()
+	if err != nil || saved.AgentAccessMode != "read-only" {
+		t.Fatalf("saved agent access mode = %q, err=%v", saved.AgentAccessMode, err)
+	}
+
+	decision := make(chan bool, 1)
+	pending = &generationUpdate{decision: decision}
+	current = approvalPage
+	list.SelectedRow = 1
+	handled, message = handleAccessModeInput("<Enter>", &current, summaryPage, list, &config, &options, nil, &rows, &pending)
+	if !handled || message != "" || current != agentProgressPage || <-decision {
+		t.Fatalf("deny action was not returned to the waiting agent: handled=%v message=%q page=%v", handled, message, current)
+	}
+	if pending != nil {
+		t.Fatal("permission request remained pending after denial")
+	}
+}
+
 func TestInitialGenerationOptionsFallsBackToLatestSavedProject(t *testing.T) {
 	config := projectstore.Config{Projects: []projectstore.Project{
 		{GenerationMode: "local", UpdatedAt: "2026-01-01T00:00:00Z"},
@@ -220,15 +252,17 @@ func TestGenerationReporterStopsOnCancellation(t *testing.T) {
 
 func TestActivityRowsUseDistinctSemanticColors(t *testing.T) {
 	for _, test := range []struct {
-		line, want string
-		color      ui.Color
+		line, want, absent string
+		color              ui.Color
 	}{
-		{"Waiting on mistral model test-model (turn 1)", "[THINK](fg:" + colorThinking, ui.ColorViolet},
-		{"Created internal/app.go", "[+](fg:" + colorAdded, ui.ColorGreen},
-		{"Updated internal/app.go", "[~](fg:" + colorChanged, ui.ColorGold},
-		{"Removed internal/app.go", "[-](fg:" + colorRemoved, ui.ColorTomato},
-		{"You: add a health endpoint", "[YOU](fg:" + colorUser, ui.ColorLightCyan},
-		{"tool error: unknown tool", "[ERROR](fg:" + colorError, ui.ColorRed},
+		{"Waiting on mistral model test-model (request 1/64)", "[... think](fg:" + colorThinking, "Waiting on", ui.ColorViolet},
+		{"Action: Writing internal/app.go", "[> write](fg:" + colorChanged, "Action:", ui.ColorGold},
+		{"Action: Running go test ./...", "[> run](fg:" + colorCheck, "Action:", ui.ColorLightBlue},
+		{"Created internal/app.go", "[+ created](fg:" + colorAdded, "Created", ui.ColorGreen},
+		{"Updated internal/app.go", "[~ updated](fg:" + colorChanged, "Updated", ui.ColorGold},
+		{"Removed internal/app.go", "[- removed](fg:" + colorRemoved, "Removed", ui.ColorTomato},
+		{"You: add a health endpoint", "[YOU](fg:" + colorUser, "", ui.ColorLightCyan},
+		{"Command failed: go fmt failed: exit status 1", "[! failed](fg:" + colorError, "Command failed:", ui.ColorRed},
 	} {
 		got := colorActivity(test.line)
 		if !strings.HasPrefix(got, test.want) {
@@ -241,6 +275,14 @@ func TestActivityRowsUseDistinctSemanticColors(t *testing.T) {
 		if cells[0].Style.Fg != test.color {
 			t.Errorf("colorActivity(%q) first color = %v, want %v", test.line, cells[0].Style.Fg, test.color)
 		}
+		plain := visibleStyledText(got)
+		if test.absent != "" && strings.Contains(plain, test.absent) {
+			t.Errorf("colorActivity(%q) retained verbose source wording %q: %q", test.line, test.absent, plain)
+		}
+	}
+	got := visibleStyledText(colorActivity("Command failed: go fmt failed: exit status 1"))
+	if got != "! failed go fmt · exit status 1" {
+		t.Fatalf("command failure event = %q, want compact event wording", got)
 	}
 }
 
@@ -422,6 +464,68 @@ func TestTemplateSelectionFiltersArchitectureByShape(t *testing.T) {
 	}
 	if _, ok := templateForChoices(jobShape, 1); ok {
 		t.Fatal("one-shot shape accepted an unsupported architecture")
+	}
+}
+
+func TestWizardComposesPatternsAndKeepsOnePrimaryDatabase(t *testing.T) {
+	wizard := projectWizard{}
+	patterns := catalog.Patterns()
+	patternIndex := func(id string) int {
+		for i, item := range patterns {
+			if item.ID == id {
+				return i
+			}
+		}
+		return -1
+	}
+	if err := wizard.togglePattern(patternIndex(catalog.PatternRAG)); err != nil {
+		t.Fatal(err)
+	}
+	if err := wizard.togglePattern(patternIndex(catalog.PatternChatbot)); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(wizard.patterns, ",") != "rag,chatbot" {
+		t.Fatalf("selected patterns = %v", wizard.patterns)
+	}
+
+	items := catalog.Capabilities()
+	index := func(id string) int {
+		for i, item := range items {
+			if item.ID == id {
+				return i
+			}
+		}
+		return -1
+	}
+	if err := wizard.toggleCapability(index(catalog.CapabilitySQLite)); err != nil {
+		t.Fatal(err)
+	}
+	if err := wizard.toggleCapability(index(catalog.CapabilityPostgres)); err != nil {
+		t.Fatal(err)
+	}
+	if len(wizard.capabilities) != 1 || wizard.capabilities[0] != catalog.CapabilityPostgres {
+		t.Fatalf("primary database selection = %v, want only PostgreSQL", wizard.capabilities)
+	}
+	if err := wizard.toggleCapability(index(catalog.CapabilityRedis)); err == nil {
+		t.Fatal("planned capability was selectable")
+	}
+	if err := wizard.toggleCapability(index(catalog.CapabilityPostgres)); err != nil {
+		t.Fatal(err)
+	}
+	if len(wizard.capabilities) != 0 {
+		t.Fatalf("optional database skip left selections: %v", wizard.capabilities)
+	}
+}
+
+func TestPlannedStacksAreVisibleButUnavailable(t *testing.T) {
+	choices := stackChoices()
+	if len(choices) != 5 || !stackSupported(0) {
+		t.Fatalf("stack choices = %+v", choices)
+	}
+	for index, name := range []string{"Node.js", "NestJS", "Laravel", "PHP"} {
+		if stackSupported(index+1) || !strings.Contains(choices[index+1].name, "planned") || !strings.Contains(choices[index+1].name, name) {
+			t.Errorf("planned stack choice = %+v", choices[index+1])
+		}
 	}
 }
 

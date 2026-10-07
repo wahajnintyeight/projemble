@@ -33,6 +33,7 @@ type workspaceAction struct {
 	provider bool
 	model    bool
 	thinking bool
+	access   bool
 }
 
 func newAgentWorkspace() *agentWorkspace {

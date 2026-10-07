@@ -14,9 +14,10 @@ func (w *agentWorkspace) Render(width, height int, rows []string, options genera
 	if options.Provider == llm.OpenAIWeb {
 		w.header.Text = w.sidebarText(provider, options.Model, path, running, queued) + "\n\n" + styleLabel("Thinking effort:") + " " + reasoningEffortLabel(options.ReasoningEffort)
 	}
-	w.navigation.Text = "F2 / Esc  Projects\nF3  Provider\nF4  Model\nCtrl+O  Activity details\nCtrl+B  Hide this panel\nSwitching stops current work."
+	w.header.Text += "\n\n" + styleLabel("Agent access:") + " " + accessModeLabel(options.AccessMode)
+	w.navigation.Text = "F2 / Esc  Projects\nF3  Provider\nF4  Model\nF6  Access mode\nCtrl+O  Activity details\nCtrl+B  Hide this panel\nSwitching stops current work."
 	if options.Provider == llm.OpenAIWeb {
-		w.navigation.Text = "F2 / Esc  Projects\nF3  Provider\nF4  Model\nF5  Thinking effort\nCtrl+O  Activity details\nCtrl+B  Hide this panel\nSwitching stops current work."
+		w.navigation.Text = "F2 / Esc  Projects\nF3  Provider\nF4  Model\nF5  Thinking effort\nF6  Access mode\nCtrl+O  Activity details\nCtrl+B  Hide this panel\nSwitching stops current work."
 	}
 	leftWidth, top := width, 0
 	wide := width >= 110 && height >= 20
@@ -49,9 +50,9 @@ func (w *agentWorkspace) Render(width, height int, rows []string, options genera
 	w.transcript.SetRect(0, top, leftWidth, transcriptBottom)
 	w.transcript.content(rows, w.details, follow)
 	w.composer.SetRect(0, composerTop, leftWidth, height)
-	w.composer.TitleBottom = "Enter send · F2 projects · F3 provider · F4 model · Ctrl+B panel · Ctrl+L redraw"
+	w.composer.TitleBottom = "Enter send · F2 projects · F3 provider · F4 model · F6 access · Ctrl+B panel · Ctrl+L redraw"
 	if options.Provider == llm.OpenAIWeb {
-		w.composer.TitleBottom = "Enter send · F2 projects · F3 provider · F4 model · F5 thinking · Ctrl+B panel · Ctrl+L redraw"
+		w.composer.TitleBottom = "Enter send · F2 projects · F3 provider · F4 model · F5 thinking · F6 access · Ctrl+B panel · Ctrl+L redraw"
 	}
 	if running {
 		w.composer.TitleBottom = fmt.Sprintf("%c Working · queued %d/%d · Enter queue · Ctrl+B panel · Ctrl+L redraw", agentSpinnerFrames[w.spinner%len(agentSpinnerFrames)], queued, maxPendingPrompts)

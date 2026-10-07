@@ -1,0 +1,33 @@
+version: 2
+project_name: projemble
+
+builds:
+  - id: projemble
+    main: ./cmd/projemble
+    binary: projemble
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - windows
+      - linux
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+
+archives:
+  - formats:
+      - tar.gz
+    format_overrides:
+      - goos: windows
+        formats:
+          - zip
+
+checksum:
+  name_template: SHA256SUMS.txt
+  algorithm: sha256
+
+release:
+  github:
+    owner: wahajnintyeight
+    name: projemble

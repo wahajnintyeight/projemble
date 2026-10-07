@@ -8,6 +8,7 @@ import (
 	"github.com/metaspartan/gotui/v5/widgets"
 	"os"
 	"path/filepath"
+	"projemble/internal/agent"
 	"projemble/internal/auth"
 	"projemble/internal/catalog"
 	"projemble/internal/llm"
@@ -38,8 +39,18 @@ func handleTextInput(event ui.Event, currentPage page, nameInput, descriptionInp
 			*nextPage = apiKeyPage
 		case projectNamePage:
 			*nextPage = homePage
+		case projectDescriptionPage:
+			*nextPage = projectNamePage
 		case projectLocationPage:
 			*nextPage = projectDescriptionPage
+		case workloadPage:
+			*nextPage = projectLocationPage
+		case patternPage:
+			*nextPage = workloadPage
+		case topologyPage:
+			*nextPage = patternPage
+		case capabilityPage:
+			*nextPage = architecturePage
 		case repairPathPage:
 			*nextPage = homePage
 		default:
@@ -59,9 +70,6 @@ func handleTextInput(event ui.Event, currentPage page, nameInput, descriptionInp
 		}
 		if currentPage == projectDescriptionPage {
 			description := strings.TrimSpace(active.Text)
-			if description == "" {
-				return false, false, "Add a short description to continue."
-			}
 			if utf8.RuneCountInString(description) > maxDescriptionRunes {
 				return false, false, fmt.Sprintf("Keep the description under %d characters.", maxDescriptionRunes)
 			}
@@ -123,7 +131,7 @@ func handleTextInput(event ui.Event, currentPage page, nameInput, descriptionInp
 		}
 		active.Text = parent
 		active.Cursor = utf8.RuneCountInString(parent)
-		*nextPage = appShapePage
+		*nextPage = workloadPage
 		return true, false, ""
 	case "<Backspace>", "<C-h>":
 		active.Backspace()
@@ -247,6 +255,7 @@ type providerChoice struct {
 
 type generationOptions struct {
 	Mode            string
+	AccessMode      string
 	Provider        llm.ProviderID
 	Model           string
 	ReasoningEffort llm.ReasoningEffort
@@ -306,7 +315,7 @@ func providerAt(index int) (providerChoice, bool) {
 }
 
 func isChoicePage(current page) bool {
-	return current == homePage || current == generationModePage || current == providerPage || current == appShapePage || current == architecturePage
+	return current == homePage || current == generationModePage || current == providerPage || current == workloadPage || current == patternPage || current == topologyPage || current == stackPage || current == capabilityPage || current == appShapePage || current == architecturePage || current == accessModePage || current == approvalPage
 }
 
 func updateChoiceList(list *widgets.List, title string, choices []catalogChoice, selected, width, height int) {
@@ -335,26 +344,31 @@ func updateSummary(list *widgets.List, name, description string, template catalo
 		styleLabel("Project name:") + "  " + name,
 		styleLabel("Description:") + "   " + description,
 		styleLabel("Generation:") + "    " + generationLabel(options),
-		styleLabel("Template:") + "      " + template.Name,
-		styleLabel("App shape:") + "     " + shape.Name,
-		styleLabel("Architecture:") + "  " + architecture.Name,
-		styleLabel("Stack:") + "         " + template.StackID,
-		styleLabel("Service setup:") + " " + frameworkLabel(template.ServiceFrameworkID),
-		styleLabel("Project path:") + "  " + projectPath,
+	}
+	if options.Mode == "agent" {
+		list.Rows = append(list.Rows, styleLabel("Agent access:")+"  "+accessModeLabel(options.AccessMode))
+	}
+	list.Rows = append(list.Rows,
+		styleLabel("Template:")+"      "+template.Name,
+		styleLabel("App shape:")+"     "+shape.Name,
+		styleLabel("Architecture:")+"  "+architecture.Name,
+		styleLabel("Stack:")+"         "+template.StackID,
+		styleLabel("Service setup:")+" "+frameworkLabel(template.ServiceFrameworkID),
+		styleLabel("Project path:")+"  "+projectPath,
 		"",
 		"Projemble generates this template and saves your project blueprint locally.",
 		credentialNote,
 		"",
-	}
+	)
 	if saveError != "" {
 		list.Rows = append(list.Rows, styleError(saveError))
 	}
 	list.SelectedRow = 0
 	list.SelectedStyle = list.TextStyle
 	if action != "" {
-		setFooter(&list.Block, action+" | r provider g generation n name d desc p path s shape a arch | q quit", false)
+		setFooter(&list.Block, action+" | F6 access r provider g generation n name d desc p path s shape a arch | q quit", false)
 	} else {
-		setFooter(&list.Block, "r provider g generation n name d desc p path s shape a arch | q quit", false)
+		setFooter(&list.Block, "F6 access r provider g generation n name d desc p path s shape a arch | q quit", false)
 	}
 	list.SetRect(0, 0, width, height)
 }
@@ -368,6 +382,10 @@ func generationLabel(options generationOptions) string {
 }
 
 func initialGenerationOptions(config projectstore.Config) generationOptions {
+	accessMode := agent.AccessAskAlways
+	if configured := agent.AccessMode(config.AgentAccessMode); configured.Valid() {
+		accessMode = configured
+	}
 	defaults := config.Generation
 	if defaults.Mode == "" && len(config.Projects) > 0 {
 		latest := config.Projects[0]
@@ -379,9 +397,9 @@ func initialGenerationOptions(config projectstore.Config) generationOptions {
 		defaults = projectstore.GenerationDefaults{Mode: latest.GenerationMode, Provider: latest.AIProvider, Model: latest.AIModel, ReasoningEffort: latest.ReasoningEffort}
 	}
 	if defaults.Mode != "agent" {
-		return generationOptions{Mode: "local"}
+		return generationOptions{Mode: "local", AccessMode: string(accessMode)}
 	}
-	return generationOptions{Mode: "agent", Provider: llm.ProviderID(defaults.Provider), Model: defaults.Model, ReasoningEffort: llm.ReasoningEffort(defaults.ReasoningEffort)}
+	return generationOptions{Mode: "agent", AccessMode: string(accessMode), Provider: llm.ProviderID(defaults.Provider), Model: defaults.Model, ReasoningEffort: llm.ReasoningEffort(defaults.ReasoningEffort)}
 }
 
 func providerIndex(id llm.ProviderID) int {

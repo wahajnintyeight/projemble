@@ -29,14 +29,20 @@ func TestOnboardingEscapeFlowThroughTerminalEvents(t *testing.T) {
 	key(tcell.KeyEnter)
 	text(parent)
 	key(tcell.KeyEnter)
-	key(tcell.KeyEnter) // shape
+	key(tcell.KeyEnter) // workload
+	key(tcell.KeyEnter) // patterns
+	key(tcell.KeyEnter) // service topology
 	key(tcell.KeyEnter) // architecture
+	key(tcell.KeyDown)
+	key(tcell.KeyEnter) // Go stack
+	key(tcell.KeyEnter) // optional capabilities
+	key(tcell.KeyEnter) // generation mode
 	key(tcell.KeyDown)
 	key(tcell.KeyEnter) // scaffold + agent
 	key(tcell.KeyEnter) // provider -> API key
-	for i := 0; i < 9; i++ {
+	for i := 0; i < 13; i++ {
 		key(tcell.KeyEsc)
-	} // key -> provider -> mode -> architecture -> shape -> path -> description -> name -> home -> exit
+	} // back through every wizard step, then exit
 	runTerminalKeyFlow(t, keys)
 }
 

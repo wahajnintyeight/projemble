@@ -1,7 +1,6 @@
 package agent
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -9,10 +8,8 @@ import (
 	"io"
 	"io/fs"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
-	"time"
 
 	"projemble/internal/llm"
 )
@@ -23,7 +20,7 @@ const (
 	maxDirectoryEntries  = 10_000
 )
 
-func runTool(ctx context.Context, root, name, raw, secretEnvName string) (string, error) {
+func runTool(ctx context.Context, root, name, raw, secretEnvName, secret string, output io.Writer) (string, error) {
 	switch name {
 	case "list_files":
 		args, err := decodeToolArgs(raw, []string{"path"}, []string{"path"})
@@ -48,7 +45,19 @@ func runTool(ctx context.Context, root, name, raw, secretEnvName string) (string
 		if err != nil {
 			return "", err
 		}
-		return runGoCheck(ctx, root, args["check"], secretEnvName)
+		return runGoCheck(ctx, root, args["check"], secretEnvName, secret, output)
+	case "run_command":
+		args, runtimeArgs, err := decodeRunCommandArguments(raw)
+		if err != nil {
+			return "", err
+		}
+		return runProjectCommand(ctx, root, args["operation"], args["target"], secretEnvName, secret, output, runtimeArgs...)
+	case "run_shell":
+		args, err := decodeToolArgs(raw, []string{"command"}, []string{"command"})
+		if err != nil {
+			return "", err
+		}
+		return runShellCommand(ctx, root, args["command"], secretEnvName, secret, output)
 	default:
 		return "", fmt.Errorf("unknown tool %q", name)
 	}
@@ -58,6 +67,28 @@ func runTool(ctx context.Context, root, name, raw, secretEnvName string) (string
 // advertised in the provider schema. Provider schemas are hints; this is the
 // actual execution boundary.
 func decodeToolArgs(raw string, required, allowed []string) (map[string]string, error) {
+	values, err := decodeToolObject(raw, allowed)
+	if err != nil {
+		return nil, err
+	}
+	args := make(map[string]string, len(values))
+	for field, value := range values {
+		text, err := decodeToolString(value, field)
+		if err != nil {
+			return nil, err
+		}
+		args[field] = text
+	}
+	for _, field := range required {
+		value, ok := args[field]
+		if !ok || (field != "content" && strings.TrimSpace(value) == "") {
+			return nil, fmt.Errorf("required tool argument %q is missing or empty", field)
+		}
+	}
+	return args, nil
+}
+
+func decodeToolObject(raw string, allowed []string) (map[string]json.RawMessage, error) {
 	if len(raw) > maxToolArgumentBytes {
 		return nil, fmt.Errorf("tool arguments exceed %d bytes", maxToolArgumentBytes)
 	}
@@ -80,30 +111,61 @@ func decodeToolArgs(raw string, required, allowed []string) (map[string]string, 
 	for _, field := range allowed {
 		allowedFields[field] = struct{}{}
 	}
-	args := make(map[string]string, len(values))
-	for field, value := range values {
+	for field := range values {
 		if _, ok := allowedFields[field]; !ok {
 			return nil, fmt.Errorf("unexpected tool argument %q", field)
 		}
-		if string(value) == "null" {
-			return nil, fmt.Errorf("tool argument %q must be a string", field)
-		}
-		var text string
-		if err := json.Unmarshal(value, &text); err != nil {
-			return nil, fmt.Errorf("tool argument %q must be a string", field)
-		}
-		args[field] = text
 	}
-	for _, field := range required {
-		value, ok := args[field]
-		if !ok || (field != "content" && strings.TrimSpace(value) == "") {
-			return nil, fmt.Errorf("required tool argument %q is missing or empty", field)
+	return values, nil
+}
+
+func decodeToolString(value json.RawMessage, field string) (string, error) {
+	if string(value) == "null" {
+		return "", fmt.Errorf("tool argument %q must be a string", field)
+	}
+	var text string
+	if err := json.Unmarshal(value, &text); err != nil {
+		return "", fmt.Errorf("tool argument %q must be a string", field)
+	}
+	return text, nil
+}
+
+func decodeRunCommandArguments(raw string) (map[string]string, []string, error) {
+	values, err := decodeToolObject(raw, []string{"operation", "target", "args"})
+	if err != nil {
+		return nil, nil, err
+	}
+	args := make(map[string]string, 2)
+	for _, field := range []string{"operation", "target"} {
+		if value, ok := values[field]; ok {
+			text, err := decodeToolString(value, field)
+			if err != nil {
+				return nil, nil, err
+			}
+			args[field] = text
 		}
 	}
-	return args, nil
+	if strings.TrimSpace(args["operation"]) == "" {
+		return nil, nil, errors.New("required tool argument \"operation\" is missing or empty")
+	}
+
+	var runtimeArgs []string
+	if value, ok := values["args"]; ok {
+		if string(value) == "null" || json.Unmarshal(value, &runtimeArgs) != nil || runtimeArgs == nil {
+			return nil, nil, errors.New("tool argument \"args\" must be an array of strings")
+		}
+	}
+	if err := validateRuntimeArgs(runtimeArgs); err != nil {
+		return nil, nil, err
+	}
+	return args, runtimeArgs, nil
 }
 
 func validateToolCalls(root string, calls []llm.ToolCall, idOptional bool) error {
+	return validateToolCallsForAccess(root, calls, idOptional, AccessFull)
+}
+
+func validateToolCallsForAccess(root string, calls []llm.ToolCall, idOptional bool, mode AccessMode) error {
 	seenIDs := make(map[string]struct{}, len(calls))
 	for _, call := range calls {
 		if strings.TrimSpace(call.ID) == "" && !idOptional {
@@ -119,10 +181,22 @@ func validateToolCalls(root string, calls []llm.ToolCall, idOptional bool) error
 		if err != nil {
 			return err
 		}
+		if mode == AccessReadOnly && call.Name != "list_files" && call.Name != "read_file" {
+			return fmt.Errorf("read-only mode blocks %s", call.Name)
+		}
 		if call.Name == "list_files" || call.Name == "read_file" || call.Name == "write_file" {
 			if _, err := safePath(root, args["path"]); err != nil {
 				return fmt.Errorf("%s path rejected: %w", call.Name, err)
 			}
+		}
+		if call.Name == "run_command" && args["target"] != "" && args["target"] != "./..." {
+			target := filepath.FromSlash(strings.TrimPrefix(args["target"], "./"))
+			if _, err := safePath(root, target); err != nil {
+				return fmt.Errorf("run_command target rejected: %w", err)
+			}
+		}
+		if call.Name == "run_shell" && strings.TrimSpace(args["command"]) == "" {
+			return errors.New("shell command is required")
 		}
 		if call.Name == "write_file" {
 			if isProtectedWritePath(args["path"]) {
@@ -153,12 +227,48 @@ func validateArgumentsOnly(name, raw string) (map[string]string, error) {
 		default:
 			return nil, errors.New("run_go_check check must be test, build, or vet")
 		}
+	case "run_command":
+		args, runtimeArgs, err := decodeRunCommandArguments(raw)
+		if err != nil {
+			return nil, err
+		}
+		if _, err := goCommandArgs(args["operation"], args["target"], runtimeArgs...); err != nil {
+			return nil, err
+		}
+		return args, nil
+	case "run_shell":
+		args, err := decodeToolArgs(raw, []string{"command"}, []string{"command"})
+		if err != nil {
+			return nil, err
+		}
+		if err := validateShellCommand(args["command"]); err != nil {
+			return nil, err
+		}
+		return args, nil
 	default:
 		return nil, fmt.Errorf("unknown tool %q", name)
 	}
 }
 
 func toolAction(name, raw string) string {
+	if name == "run_command" {
+		args, runtimeArgs, err := decodeRunCommandArguments(raw)
+		if err != nil {
+			return "Calling run_command"
+		}
+		return "Running " + goCommandSummary(args["operation"], args["target"], runtimeArgs)
+	}
+	if name == "run_shell" {
+		args, err := decodeToolArgs(raw, []string{"command"}, []string{"command"})
+		if err != nil {
+			return "Calling run_shell"
+		}
+		command := strings.Join(strings.Fields(args["command"]), " ")
+		if len(command) > 120 {
+			command = command[:120] + "..."
+		}
+		return "Running shell in project: " + command
+	}
 	var args map[string]string
 	if err := json.Unmarshal([]byte(raw), &args); err != nil {
 		return "Calling " + name
@@ -178,6 +288,28 @@ func toolAction(name, raw string) string {
 }
 
 func toolOutcome(name, raw, result string) string {
+	if strings.HasPrefix(result, "permission denied") {
+		return "Permission denied:" + strings.TrimPrefix(result, "permission denied")
+	}
+	if name == "run_command" {
+		if strings.HasPrefix(result, "guardrail:") {
+			return "Command skipped: " + strings.TrimPrefix(result, "guardrail:")
+		}
+		if index := strings.LastIndex(result, "tool error:"); index >= 0 {
+			return "Command failed: " + strings.TrimSpace(result[index+len("tool error:"):])
+		}
+		args, runtimeArgs, err := decodeRunCommandArguments(raw)
+		if err != nil {
+			return "Command completed"
+		}
+		return "Command completed: " + goCommandSummary(args["operation"], args["target"], runtimeArgs)
+	}
+	if name == "run_shell" {
+		if index := strings.LastIndex(result, "tool error:"); index >= 0 {
+			return "Command failed: " + strings.TrimSpace(result[index+len("tool error:"):])
+		}
+		return "Command completed: shell"
+	}
 	if name == "run_go_check" || strings.HasPrefix(result, "tool error:") {
 		return result
 	}
@@ -198,6 +330,45 @@ func toolOutcome(name, raw, result string) string {
 		return fmt.Sprintf("%s (%d bytes)", result, len(args["content"]))
 	default:
 		return result
+	}
+}
+
+func permissionForTool(name, raw string) (PermissionRequest, error) {
+	switch name {
+	case "list_files", "read_file":
+		args, err := decodeToolArgs(raw, []string{"path"}, []string{"path"})
+		if err != nil {
+			return PermissionRequest{}, err
+		}
+		action := "Read project directory"
+		if name == "read_file" {
+			action = "Read project file"
+		}
+		return PermissionRequest{Action: action, Target: cleanPermissionTarget(args["path"])}, nil
+	case "write_file":
+		args, err := decodeToolArgs(raw, []string{"path", "content"}, []string{"path", "content"})
+		if err != nil {
+			return PermissionRequest{}, err
+		}
+		return PermissionRequest{Action: "Write project file", Target: cleanPermissionTarget(args["path"])}, nil
+	case "run_command":
+		args, runtimeArgs, err := decodeRunCommandArguments(raw)
+		if err != nil {
+			return PermissionRequest{}, err
+		}
+		return PermissionRequest{Action: "Run Go command", Target: cleanPermissionTarget(goCommandSummary(args["operation"], args["target"], runtimeArgs))}, nil
+	case "run_shell":
+		args, err := decodeToolArgs(raw, []string{"command"}, []string{"command"})
+		if err != nil {
+			return PermissionRequest{}, err
+		}
+		command := strings.Join(strings.Fields(args["command"]), " ")
+		if len(command) > 160 {
+			command = command[:160] + "..."
+		}
+		return PermissionRequest{Action: "Run shell command", Target: cleanPermissionTarget(command)}, nil
+	default:
+		return PermissionRequest{}, fmt.Errorf("unknown tool %q", name)
 	}
 }
 
@@ -389,65 +560,6 @@ func isCredentialPath(path string) bool {
 	return false
 }
 
-func runGoCheck(parent context.Context, root, check, secretEnvName string) (string, error) {
-	var args []string
-	switch check {
-	case "test":
-		args = []string{"test", "./..."}
-	case "build":
-		args = []string{"build", "./..."}
-	case "vet":
-		args = []string{"vet", "./..."}
-	default:
-		return "", errors.New("check must be test, build, or vet")
-	}
-	ctx, cancel := context.WithTimeout(parent, 3*time.Minute)
-	defer cancel()
-	command := exec.CommandContext(ctx, "go", args...)
-	command.Dir = root
-	command.Env = safeGoCheckEnvironment(secretEnvName)
-	var stdout, stderr cappedBuffer
-	stdout.limit = maxToolOutput
-	stderr.limit = maxToolOutput
-	command.Stdout = &stdout
-	command.Stderr = &stderr
-	err := command.Run()
-	text := stdout.String() + stderr.String()
-	if stdout.truncated || stderr.truncated {
-		text += "\n[check output truncated]"
-	}
-	text = truncate(text, maxToolOutput)
-	if ctx.Err() != nil {
-		return text, fmt.Errorf("go %s timed out: %w", check, ctx.Err())
-	}
-	if err != nil {
-		return text, fmt.Errorf("go %s failed: %w", check, err)
-	}
-	if text == "" {
-		text = "go " + check + " ./... passed"
-	}
-	return text, nil
-}
-
-type cappedBuffer struct {
-	bytes.Buffer
-	limit     int
-	truncated bool
-}
-
-func (buffer *cappedBuffer) Write(data []byte) (int, error) {
-	remaining := buffer.limit - buffer.Len()
-	if len(data) > remaining {
-		if remaining > 0 {
-			_, _ = buffer.Buffer.Write(data[:remaining])
-		}
-		buffer.truncated = true
-	} else {
-		_, _ = buffer.Buffer.Write(data)
-	}
-	return len(data), nil
-}
-
 func safeCommandEnvironment(secretEnvName string) []string {
 	var safe []string
 	blocked := strings.ToUpper(secretEnvName)
@@ -489,4 +601,17 @@ func safeGoCheckEnvironment(secretEnvName string) []string {
 		safe = append(safe, entry)
 	}
 	return append(safe, "GOPROXY=off", "GOSUMDB=off", "GOTOOLCHAIN=local", "GOFLAGS=-mod=readonly")
+}
+
+func safeGoRunEnvironment(secretEnvName string) []string {
+	var safe []string
+	for _, entry := range safeCommandEnvironment(secretEnvName) {
+		name, _, _ := strings.Cut(entry, "=")
+		switch strings.ToUpper(name) {
+		case "GOPROXY", "GOSUMDB", "GOTOOLCHAIN", "GOFLAGS":
+			continue
+		}
+		safe = append(safe, entry)
+	}
+	return append(safe, "GOTOOLCHAIN=local", "GOFLAGS=-mod=readonly")
 }

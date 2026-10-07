@@ -14,7 +14,6 @@ import (
 	"github.com/metaspartan/gotui/v5/widgets"
 
 	"projemble/internal/agent"
-	"projemble/internal/auth"
 	"projemble/internal/catalog"
 	"projemble/internal/llm"
 	"projemble/internal/projectstore"
@@ -48,7 +47,14 @@ func runWithInitializer(initialize func() error) error {
 	lastPage := page(-1)
 	selectedShape := 0
 	selectedArchitecture := 0
+	selectedWorkload := 0
+	selectedStack := 0
+	wizard := projectWizard{}
+	selectedAccessMode := 2
+	accessReturnPage := homePage
+	var pendingPermission *generationUpdate
 	providerConfig := initialGenerationOptions(config)
+	selectedAccessMode = accessModeIndex(providerConfig.AccessMode)
 	selectedMode := generationModeIndex(providerConfig)
 	selectedProvider := providerIndex(providerConfig.Provider)
 	editingLocationFromSummary := false
@@ -119,23 +125,8 @@ func runWithInitializer(initialize func() error) error {
 	}()
 	startAgentTurn := func(prompt string) {
 		generationPurpose = "turn"
-		jobContext, cancel := context.WithTimeout(context.Background(), 12*time.Minute)
-		generationCancel = cancel
-		generationUpdates = make(chan generationUpdate, 32)
-		updates := generationUpdates
+		generationUpdates, generationCancel = launchAgentTurn(agentSession, projectPath, agentSecret, prompt)
 		generationRunning = true
-		session, workspacePath := agentSession, projectPath
-		go func() {
-			reporter := &generationReporter{ctx: jobContext, updates: updates, secret: agentSecret}
-			err := updateProjectStatus(workspacePath, "interrupted")
-			if err == nil {
-				err = session.Turn(jobContext, workspacePath, prompt, reporter)
-			}
-			if err == nil {
-				err = updateProjectStatus(workspacePath, "ready")
-			}
-			updates <- generationUpdate{err: err, done: true}
-		}()
 	}
 	navigateWorkspace := func(action workspaceAction) {
 		loaded, loadErr := projectstore.LoadDefault()
@@ -173,107 +164,32 @@ func runWithInitializer(initialize func() error) error {
 			lastPage = currentPage
 		}
 
-		switch currentPage {
-		case homePage:
-			updateChoiceList(list, "Projemble | Projects", homeChoices(config), selectedHome, width, height)
-			setFooter(&list.Block, "Enter open | p repair path | n new project | r selected project provider | Esc/q quit", false)
-			if validationMessage != "" {
-				setFooter(&list.Block, validationMessage, true)
+		view := wizardView{
+			currentPage: currentPage, list: list, models: models,
+			nameInput: nameInput, descriptionInput: descriptionInput, locationInput: locationInput, keyInput: keyInput, modelInput: modelInput,
+			selectedMode: selectedMode, selectedProvider: selectedProvider, selectedShape: selectedShape, selectedArchitecture: selectedArchitecture, selectedWorkload: selectedWorkload, selectedStack: selectedStack,
+			providerConfig: providerConfig, validationMessage: validationMessage, saveError: saveError, projectPath: projectPath, configPath: configPath,
+			name: nameInput.Text, description: descriptionInput.Text, authPending: authPending, reopening: reopening, selection: &wizard,
+		}
+		handledView, viewErr := renderWizardPage(view, width, height)
+		if viewErr != nil {
+			return viewErr
+		}
+		if !handledView {
+			switch currentPage {
+			case homePage:
+				renderHomePage(list, config, selectedHome, validationMessage, width, height)
+			case agentProgressPage:
+				workspace.Render(width, height, generationRows, providerConfig, projectPath, generationRunning, followAgentActivity, len(pendingPrompts))
+			case accessModePage:
+				updateChoiceList(list, "Agent access mode", accessModeChoices(), selectedAccessMode, width, height)
+				setFooter(&list.Block, "Enter save to YAML | Esc back", false)
+				renderOnboardingChoices(list, "Choose how Projemble may work inside your project. Ask always approves every action. Shell starts in this directory but the OS does not confine it, so each arbitrary shell command requires approval in every mode.", width, height)
+			case approvalPage:
+				if pendingPermission != nil && pendingPermission.permission != nil {
+					renderPermissionPrompt(list, *pendingPermission.permission, list.SelectedRow, width, height)
+				}
 			}
-			renderProjectHome(list, "Select a saved project to continue, or create a new blueprint.", width, height)
-		case generationModePage:
-			updateChoiceList(list, "5 / Build your blueprint", generationModeChoices(), selectedMode, width, height)
-			setFooter(&list.Block, "Loaded default: "+generationLabel(providerConfig)+" | Up/Down or j/k  Select  Enter  Continue  q  Quit", false)
-			renderOnboardingChoices(list, blueprintIntroduction(selectedShape, selectedArchitecture), width, height)
-		case providerPage:
-			updateChoiceList(list, "Choose an AI provider", providerChoices(), selectedProvider, width, height)
-			if reopening != nil {
-				list.Title = "Provider for " + reopening.Name
-			}
-			if authPending {
-				setFooter(&list.Block, "Finish sign-in in your browser | Esc/b cancels | q quits", false)
-			} else if validationMessage != "" {
-				setFooter(&list.Block, validationMessage+" | Enter retry | Esc/b back", true)
-			}
-			renderOnboardingChoices(list, "Agent / Provider connection\nChoose the provider that will implement features on your generated scaffold. Saved credentials can be reused across projects.", width, height)
-		case apiKeyPage:
-			setInputLayout(keyInput, width, height)
-			if validationMessage != "" {
-				setFooter(&keyInput.Block, validationMessage, true)
-			} else {
-				setFooter(&keyInput.Block, "Enter save | Esc or Ctrl+B back", false)
-			}
-			renderOnboardingInput(keyInput, currentPage, width, height)
-		case aiModelPage:
-			models.prepare(providerConfig)
-			models.render(modelInput, width, height, validationMessage)
-		case projectNamePage:
-			setInputLayout(nameInput, width, height)
-			if validationMessage != "" {
-				setFooter(&nameInput.Block, validationMessage, true)
-			} else {
-				setFooter(&nameInput.Block, "Enter continue     Esc back", false)
-			}
-			renderOnboardingInput(nameInput, currentPage, width, height)
-		case projectDescriptionPage:
-			setInputLayout(descriptionInput, width, height)
-			if validationMessage != "" {
-				setFooter(&descriptionInput.Block, validationMessage, true)
-			} else {
-				setFooter(&descriptionInput.Block, "Enter continue     Esc back", false)
-			}
-			renderOnboardingInput(descriptionInput, currentPage, width, height)
-		case repairPathPage:
-			locationInput.Title = "Existing project directory"
-			locationInput.Placeholder = "Enter the current absolute project folder path"
-			setInputLayout(locationInput, width, height)
-			if validationMessage != "" {
-				setFooter(&locationInput.Block, validationMessage, true)
-			} else {
-				setFooter(&locationInput.Block, "Enter update saved path | Esc cancel", false)
-			}
-			ui.Render(locationInput)
-		case projectLocationPage:
-			locationInput.Title = "Project parent directory"
-			locationInput.Placeholder = "Absolute path; the project name is appended"
-			setInputLayout(locationInput, width, height)
-			if validationMessage != "" {
-				setFooter(&locationInput.Block, validationMessage, true)
-			} else {
-				setFooter(&locationInput.Block, "Enter continue | project name is appended | Esc back", false)
-			}
-			renderOnboardingInput(locationInput, currentPage, width, height)
-		case appShapePage:
-			updateChoiceList(list, "Choose the application shape", appShapeChoices(), selectedShape, width, height)
-			renderOnboardingChoices(list, shapeIntroduction(), width, height)
-		case architecturePage:
-			updateChoiceList(list, "Choose the architecture", architectureChoices(appShapeIDAt(selectedShape)), selectedArchitecture, width, height)
-			renderOnboardingChoices(list, architectureIntroduction(selectedShape), width, height)
-		case summaryPage:
-			template, ok := templateForChoices(selectedShape, selectedArchitecture)
-			if !ok {
-				return fmt.Errorf("selected shape and architecture have no matching template")
-			}
-			updateSummary(list, nameInput.Text, descriptionInput.Text, template, projectPath, providerConfig, "Enter generate project", saveError, width, height)
-			ui.Render(list)
-		case agentProgressPage:
-			workspace.Render(width, height, generationRows, providerConfig, projectPath, generationRunning, followAgentActivity, len(pendingPrompts))
-		case savedPage:
-			template, ok := templateForChoices(selectedShape, selectedArchitecture)
-			if !ok {
-				return fmt.Errorf("selected shape and architecture have no matching template")
-			}
-			updateSummary(list, nameInput.Text, descriptionInput.Text, template, projectPath, providerConfig, "", "", width, height)
-			list.Title = "Saved project"
-			list.Rows[10] = "Saved project profile. Your source files remain in the project directory."
-			list.Rows = append(list.Rows,
-				"",
-				"Config: "+configPath,
-				"Starter source files were generated.",
-				"Press Esc to return to projects.",
-			)
-			setFooter(&list.Block, "Esc projects | q exit", false)
-			ui.Render(list)
 		}
 
 		var event ui.Event
@@ -297,6 +213,13 @@ func runWithInitializer(initialize func() error) error {
 			continue
 		case event = <-uiEvents:
 		case update := <-generationUpdates:
+			if update.permission != nil {
+				pendingPermission = &update
+				accessReturnPage = agentProgressPage
+				list.SelectedRow = 1
+				currentPage = approvalPage
+				continue
+			}
 			if update.hasUsage {
 				workspace.AddUsage(update.usage)
 				continue
@@ -367,23 +290,18 @@ func runWithInitializer(initialize func() error) error {
 			}
 		case result := <-authResults:
 			authResults = nil
-			authPending = false
-			if authCancel != nil {
-				authCancel()
-				authCancel = nil
-			}
-			if result.err != nil {
-				validationMessage = chatGPTSignInMessage(result.err)
-				continue
-			}
-			models.invalidate()
-			providerConfig.Credentials = result.source
-			modelInput.Placeholder = "Model ID available to your ChatGPT plan"
-			currentPage = aiModelPage
-			validationMessage = ""
+			applyChatGPTAuthResult(result, &authPending, &authCancel, models, &providerConfig, modelInput, &currentPage, &validationMessage)
 			continue
 		}
 		event = normalizeEscape(event)
+		if handled, message := handleAccessModeInput(event.ID, &currentPage, accessReturnPage, list, &config, &providerConfig, agentSession, &generationRows, &pendingPermission); handled {
+			validationMessage = message
+			continue
+		}
+		if event.ID == "<F6>" && (currentPage == homePage || currentPage == summaryPage) {
+			openAccessMode(&currentPage, &accessReturnPage, &selectedAccessMode, providerConfig, list)
+			continue
+		}
 		if event.ID == "<C-l>" {
 			refreshTerminalView()
 			lastPage = page(-1)
@@ -521,6 +439,14 @@ func runWithInitializer(initialize func() error) error {
 					reopening = nil
 					continue
 				}
+				if currentPage == aiModelPage && nextPage == summaryPage && reopening == nil && providerConfig.Mode == "agent" {
+					accessReturnPage = summaryPage
+					selectedAccessMode = accessModeIndex(providerConfig.AccessMode)
+					list.SelectedRow = selectedAccessMode
+					currentPage = accessModePage
+					validationMessage = ""
+					continue
+				}
 				currentPage = nextPage
 				validationMessage = ""
 			}
@@ -534,6 +460,14 @@ func runWithInitializer(initialize func() error) error {
 		}
 		if currentPage == agentProgressPage {
 			action := workspace.Handle(event, generationRunning)
+			if action.access {
+				if generationRunning {
+					generationRows = appendActivity(generationRows, "Wait for the current agent action to finish before changing access mode.")
+				} else {
+					openAccessMode(&currentPage, &accessReturnPage, &selectedAccessMode, providerConfig, list)
+				}
+				continue
+			}
 			if action.thinking {
 				if providerConfig.Provider != llm.OpenAIWeb {
 					generationRows = appendActivity(generationRows, "Thinking effort is available for ChatGPT plan sessions.")
@@ -642,6 +576,8 @@ func runWithInitializer(initialize func() error) error {
 				selectedMode = generationModeIndex(providerConfig)
 				nameInput.Text = ""
 				descriptionInput.Text = ""
+				wizard = projectWizard{}
+				selectedShape, selectedArchitecture, selectedWorkload = 0, 0, workloadIndex(catalog.WorkloadHTTPAPI)
 				nameInput.Cursor, descriptionInput.Cursor = 0, 0
 				selectedProvider = providerIndex(providerConfig.Provider)
 				currentPage = projectNamePage
@@ -699,22 +635,7 @@ func runWithInitializer(initialize func() error) error {
 			if isChoicePage(currentPage) {
 				previous := list.SelectedRow
 				list.ScrollUp()
-				switch currentPage {
-				case homePage:
-					selectedHome = list.SelectedRow
-					if previous != list.SelectedRow {
-						validationMessage = ""
-					}
-				case generationModePage:
-					selectedMode = list.SelectedRow
-				case providerPage:
-					selectedProvider = list.SelectedRow
-				case appShapePage:
-					selectedShape = list.SelectedRow
-					selectedArchitecture = clampArchitectureIndex(selectedShape, selectedArchitecture)
-				case architecturePage:
-					selectedArchitecture = list.SelectedRow
-				}
+				syncChoiceSelection(currentPage, list.SelectedRow, previous, &selectedHome, &selectedMode, &selectedProvider, &selectedShape, &selectedArchitecture, &selectedWorkload, &selectedStack, &selectedAccessMode, &validationMessage)
 			} else if currentPage == agentProgressPage {
 				list.ScrollUp()
 				followAgentActivity = false
@@ -723,22 +644,7 @@ func runWithInitializer(initialize func() error) error {
 			if isChoicePage(currentPage) {
 				previous := list.SelectedRow
 				list.ScrollDown()
-				switch currentPage {
-				case homePage:
-					selectedHome = list.SelectedRow
-					if previous != list.SelectedRow {
-						validationMessage = ""
-					}
-				case generationModePage:
-					selectedMode = list.SelectedRow
-				case providerPage:
-					selectedProvider = list.SelectedRow
-				case appShapePage:
-					selectedShape = list.SelectedRow
-					selectedArchitecture = clampArchitectureIndex(selectedShape, selectedArchitecture)
-				case architecturePage:
-					selectedArchitecture = list.SelectedRow
-				}
+				syncChoiceSelection(currentPage, list.SelectedRow, previous, &selectedHome, &selectedMode, &selectedProvider, &selectedShape, &selectedArchitecture, &selectedWorkload, &selectedStack, &selectedAccessMode, &validationMessage)
 			} else if currentPage == agentProgressPage {
 				list.ScrollDown()
 				followAgentActivity = list.SelectedRow == len(generationRows)-1
@@ -758,6 +664,22 @@ func runWithInitializer(initialize func() error) error {
 					currentPage = summaryPage
 				}
 			case appShapePage:
+				currentPage = summaryPage
+			case capabilityPage:
+				currentPage = stackPage
+			case stackPage:
+				currentPage = architecturePage
+			case architecturePage:
+				if selectedWorkload == workloadIndex(catalog.WorkloadHTTPAPI) {
+					currentPage = topologyPage
+				} else {
+					currentPage = patternPage
+				}
+			case topologyPage:
+				currentPage = patternPage
+			case patternPage:
+				currentPage = workloadPage
+			case workloadPage:
 				currentPage = projectLocationPage
 			case providerPage:
 				if authPending {
@@ -778,11 +700,23 @@ func runWithInitializer(initialize func() error) error {
 					}
 				}
 			case generationModePage:
-				currentPage = architecturePage
-			case architecturePage:
-				currentPage = appShapePage
+				currentPage = capabilityPage
 			case summaryPage:
 				currentPage = generationModePage
+			}
+		case "<Space>":
+			if currentPage == patternPage {
+				if err := wizard.togglePattern(list.SelectedRow); err != nil {
+					validationMessage = err.Error()
+				} else {
+					validationMessage = ""
+				}
+			} else if currentPage == capabilityPage {
+				if err := wizard.toggleCapability(list.SelectedRow); err != nil {
+					validationMessage = err.Error()
+				} else {
+					validationMessage = ""
+				}
 			}
 		case "<Enter>":
 			switch currentPage {
@@ -792,6 +726,8 @@ func runWithInitializer(initialize func() error) error {
 					providerConfig = initialGenerationOptions(config)
 					selectedMode = generationModeIndex(providerConfig)
 					nameInput.Text, descriptionInput.Text = "", ""
+					wizard = projectWizard{}
+					selectedShape, selectedArchitecture, selectedWorkload = 0, 0, workloadIndex(catalog.WorkloadHTTPAPI)
 					nameInput.Cursor, descriptionInput.Cursor = 0, 0
 					selectedProvider = providerIndex(providerConfig.Provider)
 					currentPage = projectNamePage
@@ -802,6 +738,10 @@ func runWithInitializer(initialize func() error) error {
 					continue
 				}
 				project := config.Projects[index]
+				project = projectstore.NormalizeProject(project)
+				wizard.patterns = append([]string(nil), project.PatternIDs...)
+				wizard.capabilities = append([]string(nil), project.Capabilities...)
+				selectedWorkload = workloadIndex(project.WorkloadID)
 				if info, err := os.Stat(project.Path); err != nil || !info.IsDir() {
 					validationMessage = "Project directory unavailable: " + project.Path + " | press p to repair its path"
 					continue
@@ -816,23 +756,26 @@ func runWithInitializer(initialize func() error) error {
 				projectPath = project.Path
 				nameInput.Text, descriptionInput.Text = project.Name, project.Description
 				locationInput.Text = filepath.Dir(project.Path)
+				for i, shape := range catalog.AppShapes() {
+					if shape.ID == project.AppShapeID {
+						selectedShape = i
+						break
+					}
+				}
+				for i, architecture := range catalog.ArchitecturesForShape(project.AppShapeID) {
+					if architecture.ID == project.ArchitectureID {
+						selectedArchitecture = i
+						break
+					}
+				}
 				if project.GenerationMode != "agent" {
-					for i, shape := range catalog.AppShapes() {
-						if shape.ID == project.AppShapeID {
-							selectedShape = i
-						}
-					}
-					for i, architecture := range catalog.ArchitecturesForShape(project.AppShapeID) {
-						if architecture.ID == project.ArchitectureID {
-							selectedArchitecture = i
-						}
-					}
+					list.SelectedRow = 0
 					providerConfig = generationOptions{Mode: "local"}
 					configPath, _ = projectstore.DefaultPath()
 					currentPage = savedPage
 					continue
 				}
-				providerConfig = generationOptions{Mode: "agent", Provider: llm.ProviderID(project.AIProvider), Model: project.AIModel, ReasoningEffort: llm.ReasoningEffort(project.ReasoningEffort)}
+				providerConfig = generationOptions{Mode: "agent", AccessMode: initialGenerationOptions(config).AccessMode, Provider: llm.ProviderID(project.AIProvider), Model: project.AIModel, ReasoningEffort: llm.ReasoningEffort(project.ReasoningEffort)}
 				providerConfig.APIKey = rememberedKey(providerConfig.Provider, config)
 				selectedProvider = providerIndex(providerConfig.Provider)
 				modelInput.Text = providerConfig.Model
@@ -875,7 +818,10 @@ func runWithInitializer(initialize func() error) error {
 						providerConfig.APIKey = rememberedKey(providerConfig.Provider, config)
 					}
 					if providerConfig.APIKey != "" && providerConfig.Model != "" {
-						currentPage = summaryPage
+						accessReturnPage = summaryPage
+						selectedAccessMode = accessModeIndex(providerConfig.AccessMode)
+						list.SelectedRow = selectedAccessMode
+						currentPage = accessModePage
 					} else {
 						currentPage = providerPage
 					}
@@ -901,23 +847,9 @@ func runWithInitializer(initialize func() error) error {
 					modelInput.Cursor = 0
 				}
 				if choice.id == llm.OpenAIWeb {
-					ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
-					authCancel = cancel
+					authCancel, authResults = startChatGPTAuth(choice.newRegistration)
 					authPending = true
 					validationMessage = ""
-					authResults = make(chan chatGPTAuthResult, 1)
-					results := authResults
-					go func() {
-						var tokenSource *auth.ChatGPTTokenSource
-						var err error
-						if choice.newRegistration {
-							err = auth.LoginNewRegistration(ctx, io.Discard)
-						}
-						if err == nil {
-							tokenSource, err = auth.EnsureChatGPT(ctx, io.Discard)
-						}
-						results <- chatGPTAuthResult{source: tokenSource, err: err}
-					}()
 				} else {
 					keyInput.Text = rememberedKey(choice.id, config)
 					keyInput.Cursor = utf8.RuneCountInString(keyInput.Text)
@@ -929,8 +861,41 @@ func runWithInitializer(initialize func() error) error {
 				selectedShape = list.SelectedRow
 				selectedArchitecture = clampArchitectureIndex(selectedShape, selectedArchitecture)
 				currentPage = architecturePage
+			case workloadPage:
+				selectedWorkload = list.SelectedRow
+				selectedShape = indexOfShape(workloadShape(workloadIDAt(selectedWorkload)))
+				selectedArchitecture = clampArchitectureIndex(selectedShape, 0)
+				list.SelectedRow = 0
+				currentPage = patternPage
+			case patternPage:
+				validationMessage = ""
+				if selectedWorkload == workloadIndex(catalog.WorkloadHTTPAPI) {
+					list.SelectedRow = topologyIndex(selectedShape)
+					currentPage = topologyPage
+				} else {
+					currentPage = architecturePage
+				}
+			case topologyPage:
+				topologies := catalog.Topologies()
+				if list.SelectedRow < 0 || list.SelectedRow >= len(topologies) {
+					validationMessage = "Choose a service topology."
+					continue
+				}
+				selectedShape = indexOfShape(topologies[list.SelectedRow].ID)
+				selectedArchitecture = clampArchitectureIndex(selectedShape, selectedArchitecture)
+				currentPage = architecturePage
 			case architecturePage:
 				selectedArchitecture = list.SelectedRow
+				list.SelectedRow = 0
+				currentPage = stackPage
+			case stackPage:
+				selectedStack = list.SelectedRow
+				if !stackSupported(selectedStack) {
+					validationMessage = "That stack is planned and cannot be generated yet."
+					continue
+				}
+				list.SelectedRow = 0
+				currentPage = capabilityPage
 				plannedPath, err := plannedProjectPath(locationInput.Text, nameInput.Text)
 				if err != nil {
 					validationMessage = err.Error()
@@ -963,14 +928,15 @@ func runWithInitializer(initialize func() error) error {
 					agentSecret = providerConfig.APIKey
 					currentPage = agentProgressPage
 					projectName, description, targetPath, options := nameInput.Text, descriptionInput.Text, projectPath, providerConfig
+					profile := projectWizard{patterns: append([]string(nil), wizard.patterns...), capabilities: append([]string(nil), wizard.capabilities...)}
 					go func() {
 						reporter := &generationReporter{ctx: jobContext, updates: updates, secret: options.APIKey}
-						savedPath, savedConfig, err := saveProjectWithProgress(jobContext, projectName, description, targetPath, template, options, reporter)
+						savedPath, savedConfig, err := saveProjectWithProfileProgress(jobContext, projectName, description, targetPath, template, options, profile, reporter)
 						updates <- generationUpdate{project: savedPath, configPath: savedConfig, session: reporter.AgentSession(), err: err, done: true}
 					}()
 					continue
 				}
-				savedPath, savedConfig, err := saveProjectWithGeneration(nameInput.Text, descriptionInput.Text, projectPath, template, providerConfig)
+				savedPath, savedConfig, err := saveProjectWithProfileProgress(context.Background(), nameInput.Text, descriptionInput.Text, projectPath, template, providerConfig, wizard, io.Discard)
 				if err != nil {
 					errorText := err.Error()
 					if providerConfig.APIKey != "" {

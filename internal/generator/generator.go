@@ -15,6 +15,7 @@ import (
 // Generate creates a small, buildable Go starter in an already-created project directory.
 // It refuses to overwrite any file so a profile can safely be generated only once.
 func Generate(project projectstore.Project) error {
+	project = projectstore.NormalizeProject(project)
 	if err := Validate(project); err != nil {
 		return err
 	}
@@ -32,6 +33,9 @@ func Generate(project projectstore.Project) error {
 		return err
 	}
 	files := renderer.Files(project, template, module)
+	if err := addProfileFeatures(files, project, module); err != nil {
+		return err
+	}
 	names := make([]string, 0, len(files))
 	for name := range files {
 		names = append(names, name)
@@ -278,28 +282,71 @@ func New(service application.Service) http.Handler {
 
 func readme(project projectstore.Project, template catalog.Template, module string) string {
 	var run string
-	switch template.AppShapeID {
-	case catalog.ShapeOneShotJob:
+	switch template.WorkloadID {
+	case catalog.WorkloadOneShot:
 		run = "go run ./cmd/job"
-	case catalog.ShapeMicroservices:
-		run = "go mod tidy\n\n# Terminal 1\ngo run ./cmd/server\n\n# Terminal 2\ngo run ./cmd/catalog"
-	default:
-		run = "go run ./cmd/server"
+	case catalog.WorkloadCLI:
+		run = "go run ./cmd/cli"
+	case catalog.WorkloadWorker:
+		run = "go run ./cmd/worker"
+	case catalog.WorkloadLibrary:
+		run = "go test ./..."
+	case catalog.WorkloadHTTPAPI:
+		if template.TopologyID == catalog.TopologyMicroservices {
+			run = "go mod tidy\n\n# Terminal 1\ngo run ./cmd/server\n\n# Terminal 2\ngo run ./cmd/catalog"
+		} else {
+			run = "go run ./cmd/server"
+		}
 	}
 	result := fmt.Sprintf("# %s\n\n%s\n\nGenerated from Projemble template `%s` (%s).\n\n## Run\n\n```sh\n%s\n```\n\n## Verify\n\n```sh\ngo test ./...\ngo vet ./...\ngo build ./...\n```\n\nGo module: `%s`.\n", project.Name, project.Description, template.ID, template.Name, run, module)
-	if template.AppShapeID == catalog.ShapeOneShotJob {
+	if template.WorkloadID == catalog.WorkloadOneShot {
 		result += "\n## Adapt the pipeline\n\nUse the ordered stages in `cmd/job/main.go` for your task. For a scraper, implement fetch and parse stages; for ETL, implement extract, transform, and load. Return an error from a failed stage to stop the run. The pipeline accepts a context and exits when the work is done.\n"
+	}
+	if len(project.PatternIDs) > 0 {
+		result += "\nApplication patterns: `" + strings.Join(project.PatternIDs, "`, `") + "`. Pattern contracts are generated under `internal/pattern/`.\n"
+	}
+	for _, id := range project.Capabilities {
+		if capability, ok := catalog.CapabilityByID(id); ok && databaseCapability(id) {
+			result += fmt.Sprintf("\nDatabase: %s. Pass its connection URL to `storage.Open` before using the generated storage adapter.\n", capability.Name)
+		}
 	}
 	return result
 }
 
 // Validate checks the profile fields needed for generation without changing the filesystem.
 func Validate(project projectstore.Project) error {
+	project = projectstore.NormalizeProject(project)
 	if strings.TrimSpace(project.Path) == "" {
 		return errors.New("project path is required")
 	}
-	if _, ok := catalog.TemplateByID(project.TemplateID); !ok {
+	template, ok := catalog.TemplateByID(project.TemplateID)
+	if !ok {
 		return fmt.Errorf("unknown project template %q", project.TemplateID)
+	}
+	if project.WorkloadID != template.WorkloadID || project.TopologyID != template.TopologyID {
+		return fmt.Errorf("selected workload/topology do not match template %q", template.ID)
+	}
+	seen := map[string]bool{}
+	for _, id := range project.PatternIDs {
+		if _, ok := catalog.PatternByID(id); !ok || seen[id] {
+			return fmt.Errorf("unknown or duplicate application pattern %q", id)
+		}
+		seen[id] = true
+	}
+	seen = map[string]bool{}
+	primaryDatabase := false
+	for _, id := range project.Capabilities {
+		capability, ok := catalog.CapabilityByID(id)
+		if !ok || !capability.Supported || seen[id] {
+			return fmt.Errorf("capability %q is unknown, planned, or duplicated", id)
+		}
+		if capability.Category == "Primary database" {
+			if primaryDatabase {
+				return errors.New("choose at most one primary database")
+			}
+			primaryDatabase = true
+		}
+		seen[id] = true
 	}
 	return nil
 }

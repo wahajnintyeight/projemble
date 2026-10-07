@@ -1,4 +1,5 @@
 /projemble.exe
 /projemble
+/dist/
 *.log
 *.sum

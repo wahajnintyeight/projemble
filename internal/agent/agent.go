@@ -21,6 +21,7 @@ const (
 	maxToolCallsPerTurn     = 128
 	maxToolCallsPerResponse = 8
 	maxGoChecksPerTurn      = 6
+	maxGoRunsPerTurn        = 3
 	maxProviderCallDuration = 2 * time.Minute
 )
 
@@ -29,10 +30,13 @@ type Config struct {
 	BaseURL         string
 	Model           string
 	ReasoningEffort llm.ReasoningEffort
+	AccessMode      AccessMode
+	Approver        PermissionApprover
 	APIKey          string
 	SecretEnvName   string
 	Credentials     llm.TokenSource
 	Client          *http.Client
+	Profile         ProfileContext
 }
 
 type Agent struct {
@@ -47,6 +51,12 @@ type Agent struct {
 func New(config Config) (*Agent, error) {
 	if strings.TrimSpace(config.Model) == "" {
 		return nil, errors.New("agent model is required")
+	}
+	if config.AccessMode == "" {
+		config.AccessMode = AccessAskAlways
+	}
+	if !config.AccessMode.Valid() {
+		return nil, fmt.Errorf("unknown agent access mode %q", config.AccessMode)
 	}
 	provider, err := factory.New(llm.Config{
 		Provider:    config.ProviderID,
@@ -65,6 +75,18 @@ func New(config Config) (*Agent, error) {
 // SetReasoningEffort applies to the agent's next provider request.
 func (agent *Agent) SetReasoningEffort(effort llm.ReasoningEffort) {
 	agent.config.ReasoningEffort = effort
+}
+
+func (agent *Agent) SetAccessMode(mode AccessMode) error {
+	if !mode.Valid() {
+		return fmt.Errorf("unknown agent access mode %q", mode)
+	}
+	agent.config.AccessMode = mode
+	return nil
+}
+
+func (agent *Agent) SetPermissionApprover(approver PermissionApprover) {
+	agent.config.Approver = approver
 }
 
 // Run asks the selected provider to complete a code task using workspace tools.
@@ -107,10 +129,12 @@ func (agent *Agent) Turn(ctx context.Context, workspace, task string, output io.
 	if err := agent.checkpoint(); err != nil {
 		return fmt.Errorf("save conversation: %w", err)
 	}
-	request := llm.Request{Model: agent.config.Model, ReasoningEffort: agent.config.ReasoningEffort, Tools: llmTools()}
+	request := llm.Request{Model: agent.config.Model, ReasoningEffort: agent.config.ReasoningEffort, Tools: llmToolsForAccess(agent.config.AccessMode)}
 	providerCalls := 0
 	toolCalls := 0
 	goChecks := 0
+	goRuns := 0
+	shellRuns := 0
 	changedGoFiles := false
 	goTestAttempted := false
 	goTestPassed := false
@@ -178,7 +202,7 @@ func (agent *Agent) Turn(ctx context.Context, workspace, task string, output io.
 		if toolCalls+len(message.ToolCalls) > maxToolCallsPerTurn {
 			return agent.stopWithGuardrail(output, fmt.Sprintf("agent task reached its %d tool-action safety budget; send a follow-up instruction to continue", maxToolCallsPerTurn))
 		}
-		if err := validateToolCalls(root, message.ToolCalls, agent.config.ProviderID == llm.Gemini); err != nil {
+		if err := validateToolCallsForAccess(root, message.ToolCalls, agent.config.ProviderID == llm.Gemini, agent.config.AccessMode); err != nil {
 			return agent.stopWithGuardrail(output, "provider tool request rejected by guardrail: "+err.Error())
 		}
 		if strings.TrimSpace(message.Content) != "" {
@@ -188,27 +212,75 @@ func (agent *Agent) Turn(ctx context.Context, workspace, task string, output io.
 		}
 		agent.messages = append(agent.messages, message)
 		for _, call := range message.ToolCalls {
+			if needsApproval(agent.config.AccessMode, call.Name) {
+				permission, permissionErr := permissionForTool(call.Name, call.Arguments)
+				if permissionErr != nil {
+					return agent.stopWithGuardrail(output, "permission request rejected: "+permissionErr.Error())
+				}
+				if agent.config.APIKey != "" {
+					permission.Target = strings.ReplaceAll(permission.Target, agent.config.APIKey, "[REDACTED]")
+				}
+				if agent.config.Approver == nil {
+					if call.Name == "run_shell" {
+						return agent.stopWithGuardrail(output, "shell commands require per-command approval because the operating system does not confine them to the project directory")
+					}
+					return agent.stopWithGuardrail(output, "ask-always mode requires an interactive permission prompt")
+				}
+				approved, approvalErr := agent.config.Approver.RequestPermission(ctx, permission)
+				if approvalErr != nil {
+					return approvalErr
+				}
+				if !approved {
+					result := "permission denied by user"
+					if err := agent.writeActivity(output, "Permission denied: "+permission.Action+" "+permission.Target); err != nil {
+						return err
+					}
+					toolCalls++
+					agent.messages = append(agent.messages, llm.Message{Role: "tool", ToolCallID: call.ID, ToolName: call.Name, Content: result})
+					continue
+				}
+			}
 			if err := agent.writeActivity(output, "Action: "+toolAction(call.Name, call.Arguments)); err != nil {
 				return err
 			}
 			var result string
 			var err error
 			checkExecuted := true
-			if call.Name == "run_go_check" && goChecks >= maxGoChecksPerTurn {
+			check := validatedGoCheck(call.Name, call.Arguments)
+			operation := validatedOperation(call.Arguments)
+			runApp := call.Name == "run_command" && operation == "run"
+			if check != "" && goChecks >= maxGoChecksPerTurn {
 				result = fmt.Sprintf("guardrail: this task has reached the %d Go-check limit; continue with a follow-up instruction", maxGoChecksPerTurn)
 				checkExecuted = false
+			} else if runApp && goRuns >= maxGoRunsPerTurn {
+				result = fmt.Sprintf("guardrail: this task has reached the %d Go-app-run limit; continue with a follow-up instruction", maxGoRunsPerTurn)
+				checkExecuted = false
+			} else if call.Name == "run_shell" && shellRuns >= maxShellRunsPerTurn {
+				result = fmt.Sprintf("guardrail: this task has reached the %d shell-command limit; continue with a follow-up instruction", maxShellRunsPerTurn)
+				checkExecuted = false
 			} else {
-				if call.Name == "run_go_check" {
+				if check != "" {
 					goChecks++
 				}
-				result, err = runTool(ctx, root, call.Name, call.Arguments, agent.config.SecretEnvName)
+				if runApp {
+					goRuns++
+				}
+				if call.Name == "run_shell" {
+					shellRuns++
+				}
+				result, err = runTool(ctx, root, call.Name, call.Arguments, agent.config.SecretEnvName, agent.config.APIKey, output)
 			}
 			if call.Name == "write_file" && err == nil && requiresGoCheck(validatedPath(call.Arguments)) {
 				changedGoFiles = true
 				goTestAttempted = false
 				goTestPassed = false
 			}
-			if call.Name == "run_go_check" && validatedCheck(call.Arguments) == "test" && checkExecuted {
+			if call.Name == "run_command" && validatedOperation(call.Arguments) == "fmt" && err == nil {
+				changedGoFiles = true
+				goTestAttempted = false
+				goTestPassed = false
+			}
+			if check == "test" && checkExecuted {
 				goTestAttempted = true
 				goTestPassed = err == nil
 			}
@@ -248,6 +320,28 @@ func validatedCheck(raw string) string {
 	return args["check"]
 }
 
+func validatedOperation(raw string) string {
+	args, _, err := decodeRunCommandArguments(raw)
+	if err != nil {
+		return ""
+	}
+	return args["operation"]
+}
+
+func validatedGoCheck(name, raw string) string {
+	if name == "run_command" {
+		check := validatedOperation(raw)
+		if check == "test" || check == "build" || check == "vet" {
+			return check
+		}
+		return ""
+	}
+	if name == "run_go_check" {
+		return validatedCheck(raw)
+	}
+	return ""
+}
+
 func validatedPath(raw string) string {
 	args, err := decodeToolArgs(raw, []string{"path", "content"}, []string{"path", "content"})
 	if err != nil {
@@ -274,7 +368,11 @@ func (agent *Agent) stopWithGuardrail(output io.Writer, reason string) error {
 
 func (agent *Agent) refreshSystemPrompt() {
 	messages := make([]llm.Message, 0, len(agent.messages)+1)
-	messages = append(messages, llm.Message{Role: "system", Content: SystemPrompt})
+	system := SystemPrompt + "\n\nAccess mode: " + string(agent.config.AccessMode) + ". Follow it exactly; approval is for one action only."
+	if skills := SkillsForProfile(agent.config.Profile); len(skills) > 0 {
+		system += "\n\nSelected profile skills:\n- " + strings.Join(skills, "\n- ")
+	}
+	messages = append(messages, llm.Message{Role: "system", Content: system})
 	for _, message := range agent.messages {
 		if message.Role != "system" {
 			messages = append(messages, message)

@@ -25,6 +25,10 @@ func saveProjectWithGeneration(name, description, path string, template catalog.
 }
 
 func saveProjectWithProgress(parent context.Context, name, description, path string, template catalog.Template, options generationOptions, progress io.Writer) (string, string, error) {
+	return saveProjectWithProfileProgress(parent, name, description, path, template, options, projectWizard{}, progress)
+}
+
+func saveProjectWithProfileProgress(parent context.Context, name, description, path string, template catalog.Template, options generationOptions, wizard projectWizard, progress io.Writer) (string, string, error) {
 	if err := parent.Err(); err != nil {
 		return "", "", err
 	}
@@ -45,6 +49,10 @@ func saveProjectWithProgress(parent context.Context, name, description, path str
 			return "", "", fmt.Errorf("ChatGPT sign-in is required")
 		}
 	}
+	accessMode := agent.AccessMode(options.AccessMode)
+	if !accessMode.Valid() {
+		accessMode = agent.AccessAskAlways
+	}
 	if filepath.Base(filepath.Clean(path)) != name {
 		return "", "", fmt.Errorf("project path must end with the project name %q", name)
 	}
@@ -56,6 +64,7 @@ func saveProjectWithProgress(parent context.Context, name, description, path str
 		return "", "", err
 	}
 	config.ParentDirectory = filepath.Dir(path)
+	config.AgentAccessMode = string(accessMode)
 	config.Generation = projectstore.GenerationDefaults{Mode: options.Mode, Provider: string(options.Provider), Model: options.Model, ReasoningEffort: string(options.ReasoningEffort)}
 	settings := make(map[string]string)
 	if template.ServiceFrameworkID != "" {
@@ -69,6 +78,8 @@ func saveProjectWithProgress(parent context.Context, name, description, path str
 		AppShapeID:      template.AppShapeID,
 		ArchitectureID:  template.ArchitectureID,
 		TemplateID:      template.ID,
+		PatternIDs:      append([]string(nil), wizard.patterns...),
+		Capabilities:    append([]string(nil), wizard.capabilities...),
 		GenerationMode:  options.Mode,
 		AIProvider:      string(options.Provider),
 		AIModel:         options.Model,
@@ -108,7 +119,8 @@ func saveProjectWithProgress(parent context.Context, name, description, path str
 		return path, "", fmt.Errorf("save project profile: %w", err)
 	}
 	if options.Mode == "agent" {
-		providerAgent, err := agent.New(agent.Config{ProviderID: options.Provider, Model: options.Model, ReasoningEffort: options.ReasoningEffort, APIKey: options.APIKey, Credentials: options.Credentials})
+		approver, _ := progress.(agent.PermissionApprover)
+		providerAgent, err := agent.New(agent.Config{ProviderID: options.Provider, Model: options.Model, ReasoningEffort: options.ReasoningEffort, AccessMode: accessMode, Approver: approver, APIKey: options.APIKey, Credentials: options.Credentials, Profile: agentProfile(project)})
 		if err != nil {
 			return "", "", fmt.Errorf("configure AI agent: %w (starter preserved at %s)", err, path)
 		}
@@ -165,8 +177,12 @@ Project: %s
 Purpose: %s
 Stack: %s
 Application shape: %s
+		Workload: %s
+Topology: %s
 Architecture: %s
+Patterns: %s
+Capabilities: %s
 Template: %s
 
-Keep the selected architecture and starter structure. Add only the smallest coherent domain functionality that serves the stated purpose. Keep the code buildable, add focused tests, and run the available checks before finishing. Do not add external services, credentials, or dependencies unless the described purpose requires them.`, project.Name, project.Description, template.StackID, template.AppShapeID, template.ArchitectureID, template.Name)
+Keep the selected profile and starter structure. Add only the smallest coherent domain functionality that serves the stated purpose. Keep the code buildable, add focused tests, and run the available checks before finishing. Do not add external services, credentials, or dependencies unless the described purpose requires them.`, project.Name, project.Description, template.StackID, template.AppShapeID, project.WorkloadID, project.TopologyID, template.ArchitectureID, strings.Join(project.PatternIDs, ", "), strings.Join(project.Capabilities, ", "), template.Name)
 }
