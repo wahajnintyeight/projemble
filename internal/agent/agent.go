@@ -17,9 +17,8 @@ import (
 
 const (
 	maxToolOutput           = 32 << 10
-	maxProviderCallsPerTurn = 64
 	maxToolCallsPerTurn     = 128
-	maxToolCallsPerResponse = 8
+	maxToolCallsPerResponse = 10
 	maxGoChecksPerTurn      = 6
 	maxGoRunsPerTurn        = 3
 	maxProviderCallDuration = 2 * time.Minute
@@ -40,12 +39,18 @@ type Config struct {
 }
 
 type Agent struct {
-	config     Config
-	provider   llm.Provider
-	workspace  string
-	messages   []llm.Message
-	activities []string
-	usage      llm.Usage
+	config         Config
+	provider       llm.Provider
+	workspace      string
+	sessionID      string
+	sessionTitle   string
+	sessionCreated time.Time
+	sessionUpdated time.Time
+	messages       []llm.Message
+	activities     []string
+	usage          llm.Usage
+	summary        string
+	undoHistory    []editSnapshot
 }
 
 func New(config Config) (*Agent, error) {
@@ -121,6 +126,15 @@ func (agent *Agent) Turn(ctx context.Context, workspace, task string, output io.
 	if agent.workspace == "" {
 		agent.workspace = root
 	}
+	if agent.sessionID == "" {
+		agent.sessionID, err = newSessionID()
+		if err != nil {
+			return err
+		}
+	}
+	if agent.sessionTitle == "" {
+		agent.sessionTitle = truncateUTF8(strings.Join(strings.Fields(task), " "), 120)
+	}
 	agent.refreshSystemPrompt()
 	agent.messages = append(agent.messages, llm.Message{Role: "user", Content: task})
 	if err := agent.writeActivity(output, "You: "+task); err != nil {
@@ -130,7 +144,6 @@ func (agent *Agent) Turn(ctx context.Context, workspace, task string, output io.
 		return fmt.Errorf("save conversation: %w", err)
 	}
 	request := llm.Request{Model: agent.config.Model, ReasoningEffort: agent.config.ReasoningEffort, Tools: llmToolsForAccess(agent.config.AccessMode)}
-	providerCalls := 0
 	toolCalls := 0
 	goChecks := 0
 	goRuns := 0
@@ -144,15 +157,11 @@ func (agent *Agent) Turn(ctx context.Context, workspace, task string, output io.
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		if providerCalls >= maxProviderCallsPerTurn {
-			return agent.stopWithGuardrail(output, fmt.Sprintf("agent task stopped after %d provider requests; send a follow-up instruction to continue", maxProviderCallsPerTurn))
-		}
-		providerCalls++
 		requestLabel := fmt.Sprintf("Waiting on %s model %s", agent.config.ProviderID, agent.config.Model)
 		if agent.config.ReasoningEffort != llm.ReasoningDefault {
 			requestLabel += " · thinking " + string(agent.config.ReasoningEffort)
 		}
-		if err := agent.writeActivity(output, fmt.Sprintf("%s (request %d/%d)", requestLabel, providerCalls, maxProviderCallsPerTurn)); err != nil {
+		if err := agent.writeActivity(output, requestLabel); err != nil {
 			return err
 		}
 		request.Messages = agent.messages
@@ -203,10 +212,9 @@ func (agent *Agent) Turn(ctx context.Context, workspace, task string, output io.
 					return err
 				}
 			}
+			agent.compactCompletedTurn(task, message.Content)
+			agent.compactIfNeeded(ctx, output)
 			return agent.checkpoint()
-		}
-		if len(message.ToolCalls) > maxToolCallsPerResponse {
-			return agent.stopWithGuardrail(output, fmt.Sprintf("provider requested %d tools in one response; the safety limit is %d", len(message.ToolCalls), maxToolCallsPerResponse))
 		}
 		if toolCalls+len(message.ToolCalls) > maxToolCallsPerTurn {
 			return agent.stopWithGuardrail(output, fmt.Sprintf("agent task reached its %d tool-action safety budget; send a follow-up instruction to continue", maxToolCallsPerTurn))
@@ -220,7 +228,18 @@ func (agent *Agent) Turn(ctx context.Context, workspace, task string, output io.
 			}
 		}
 		agent.messages = append(agent.messages, message)
-		for _, call := range message.ToolCalls {
+		toolResults := make([]string, 0, len(message.ToolCalls))
+		for index, call := range message.ToolCalls {
+			if index >= maxToolCallsPerResponse {
+				result := fmt.Sprintf("deferred: only %d tool actions are executed per response; reissue this action in a later batch", maxToolCallsPerResponse)
+				if err := agent.writeActivity(output, "Deferred tool action after the per-response batch limit: "+toolAction(call.Name, call.Arguments)); err != nil {
+					return err
+				}
+				toolCalls++
+				toolResults = append(toolResults, result)
+				agent.messages = append(agent.messages, llm.Message{Role: "tool", ToolCallID: call.ID, ToolName: call.Name, Content: result})
+				continue
+			}
 			if needsApproval(agent.config.AccessMode, call.Name) {
 				permission, permissionErr := permissionForTool(call.Name, call.Arguments)
 				if permissionErr != nil {
@@ -245,6 +264,7 @@ func (agent *Agent) Turn(ctx context.Context, workspace, task string, output io.
 						return err
 					}
 					toolCalls++
+					toolResults = append(toolResults, result)
 					agent.messages = append(agent.messages, llm.Message{Role: "tool", ToolCallID: call.ID, ToolName: call.Name, Content: result})
 					continue
 				}
@@ -293,10 +313,10 @@ func (agent *Agent) Turn(ctx context.Context, workspace, task string, output io.
 						}
 					}
 				} else {
-					result, err = runTool(ctx, root, call.Name, call.Arguments, agent.config.SecretEnvName, agent.config.APIKey, output)
+					result, err = runTool(ctx, root, call.Name, call.Arguments, agent.config.SecretEnvName, agent.config.APIKey, output, &agent.undoHistory)
 				}
 			}
-			if call.Name == "write_file" && err == nil && requiresGoCheck(validatedPath(call.Arguments)) {
+			if (call.Name == "write_file" || call.Name == "edit_file" || call.Name == "undo_last_edit") && err == nil && requiresGoCheck(validatedPath(call.Name, call.Arguments)) {
 				changedGoFiles = true
 				goTestAttempted = false
 				goTestPassed = false
@@ -325,8 +345,11 @@ func (agent *Agent) Turn(ctx context.Context, workspace, task string, output io.
 			if err := agent.writeActivity(output, toolOutcome(call.Name, call.Arguments, result)); err != nil {
 				return err
 			}
+			toolResults = append(toolResults, result)
 			agent.messages = append(agent.messages, llm.Message{Role: "tool", ToolCallID: call.ID, ToolName: call.Name, Content: truncate(result, maxToolOutput)})
 		}
+		agent.compactToolBatch(message, message.ToolCalls, toolResults)
+		agent.compactIfNeeded(ctx, output)
 		if err := agent.checkpoint(); err != nil {
 			return fmt.Errorf("save conversation: %w", err)
 		}
@@ -380,8 +403,8 @@ func validatedGoCheck(name, raw string) string {
 	return ""
 }
 
-func validatedPath(raw string) string {
-	args, err := decodeToolArgs(raw, []string{"path", "content"}, []string{"path", "content"})
+func validatedPath(name, raw string) string {
+	args, err := validateArgumentsOnly(name, raw)
 	if err != nil {
 		return ""
 	}
@@ -402,21 +425,6 @@ func (agent *Agent) stopWithGuardrail(output io.Writer, reason string) error {
 		return fmt.Errorf("save stopped conversation: %w", err)
 	}
 	return errors.New(reason)
-}
-
-func (agent *Agent) refreshSystemPrompt() {
-	messages := make([]llm.Message, 0, len(agent.messages)+1)
-	system := SystemPrompt + "\n\nAccess mode: " + string(agent.config.AccessMode) + ". Follow it exactly; approval is for one action only."
-	if skills := SkillsForProfile(agent.config.Profile); len(skills) > 0 {
-		system += "\n\nSelected profile skills:\n- " + strings.Join(skills, "\n- ")
-	}
-	messages = append(messages, llm.Message{Role: "system", Content: system})
-	for _, message := range agent.messages {
-		if message.Role != "system" {
-			messages = append(messages, message)
-		}
-	}
-	agent.messages = messages
 }
 
 func (agent *Agent) writeActivity(output io.Writer, text string) error {

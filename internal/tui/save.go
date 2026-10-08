@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -118,6 +119,12 @@ func saveProjectWithProfileProgress(parent context.Context, name, description, p
 	if err := projectstore.SaveDefault(config); err != nil {
 		return path, "", fmt.Errorf("save project profile: %w", err)
 	}
+	if err := reportActivity(progress, "Resolving Go dependencies with go mod tidy."); err != nil {
+		return path, "", fmt.Errorf("report dependency setup: %w", err)
+	}
+	if err := resolveGoDependencies(parent, path); err != nil {
+		return path, "", fmt.Errorf("resolve Go dependencies: %w (project preserved at %s)", err, path)
+	}
 	if options.Mode == "agent" {
 		approver, _ := progress.(agent.PermissionApprover)
 		providerAgent, err := agent.New(agent.Config{ProviderID: options.Provider, Model: options.Model, ReasoningEffort: options.ReasoningEffort, AccessMode: accessMode, Approver: approver, APIKey: options.APIKey, Credentials: options.Credentials, Profile: agentProfile(project)})
@@ -153,6 +160,16 @@ func saveProjectWithProfileProgress(parent context.Context, name, description, p
 		return "", "", err
 	}
 	return path, configPath, nil
+}
+
+func resolveGoDependencies(ctx context.Context, path string) error {
+	command := exec.CommandContext(ctx, "go", "mod", "tidy")
+	command.Dir = path
+	output, err := command.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("go mod tidy: %w\n%s", err, strings.TrimSpace(string(output)))
+	}
+	return nil
 }
 
 func reportActivity(output io.Writer, message string) error {

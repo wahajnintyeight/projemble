@@ -78,8 +78,12 @@ func TestChatGPTWorkspaceShowsThinkingControl(t *testing.T) {
 	w := newAgentWorkspace()
 	options := generationOptions{Provider: "openai-web", Model: "gpt-5.6-luna", ReasoningEffort: "high"}
 	w.Render(160, 40, nil, options, ".", false, true, 0)
-	if !strings.Contains(w.header.Text, "Thinking effort:") || !strings.Contains(w.header.Text, "high") || !strings.Contains(w.navigation.Text, "F5  Thinking effort") || !strings.Contains(w.composer.TitleBottom, "F5 thinking") {
+	if !strings.Contains(w.header.Text, "Thinking effort:") || !strings.Contains(w.header.Text, "high") || !strings.Contains(w.navigation.Text, "F5  Thinking effort") {
 		t.Fatalf("thinking control is missing from the workspace: header=%q navigation=%q footer=%q", w.header.Text, w.navigation.Text, w.composer.TitleBottom)
+	}
+	w.Render(80, 24, nil, options, ".", false, true, 0)
+	if !strings.Contains(w.composer.TitleBottom, "F5 thinking") {
+		t.Fatalf("narrow layout hides the thinking shortcut: %q", w.composer.TitleBottom)
 	}
 	if action := w.Handle(ui.Event{ID: "<F5>"}, false); !action.thinking {
 		t.Fatal("F5 did not open the thinking effort control")

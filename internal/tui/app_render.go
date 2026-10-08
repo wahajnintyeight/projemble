@@ -29,7 +29,7 @@ func renderWizardPage(view wizardView, width, height int) (bool, error) {
 	switch view.currentPage {
 	case generationModePage:
 		updateChoiceList(list, "Generation mode", generationModeChoices(), view.selectedMode, width, height)
-		setFooter(&list.Block, "Loaded default: "+generationLabel(view.providerConfig)+" | Up/Down or j/k  Select  Enter  Continue  q  Quit", false)
+		setFooter(&list.Block, "Loaded default: "+generationLabel(view.providerConfig)+" | Up/Down or j/k  Select  Enter  Continue  b  Back  q  Quit", false)
 		renderOnboardingChoices(list, blueprintIntroduction(view.selectedShape, view.selectedArchitecture), width, height)
 	case providerPage:
 		renderProviderPage(list, view.reopening, view.selectedProvider, view.authPending, view.validationMessage, width, height)
@@ -61,7 +61,7 @@ func renderWizardPage(view wizardView, width, height int) (bool, error) {
 		renderOnboardingChoices(list, "Choose how this Go project runs. The workload sets the entry point; patterns and capabilities can be added independently.", width, height)
 	case patternPage:
 		updateChoiceList(list, "Application patterns · Space toggles · optional", patternChoices(view.selection.patterns), list.SelectedRow, width, height)
-		setFooter(&list.Block, "Space toggle | Enter continue | Esc back | no selection is fine", false)
+		setFooter(&list.Block, "Space toggle | Enter continue | Esc/b back | no selection is fine", false)
 		renderOnboardingChoices(list, "Combine patterns as needed. Standard backend, RAG, agent, and chatbot are separate from how the project runs.", width, height)
 	case topologyPage:
 		updateChoiceList(list, "Service topology", topologyChoices(), topologyIndex(view.selectedShape), width, height)
@@ -74,20 +74,26 @@ func renderWizardPage(view wizardView, width, height int) (bool, error) {
 		renderOnboardingChoices(list, architectureIntroduction(view.selectedShape), width, height)
 	case stackPage:
 		updateChoiceList(list, "Implementation stack", stackChoices(), view.selectedStack, width, height)
-		setFooter(&list.Block, "Enter continue | planned stacks cannot be selected | Esc back", false)
+		setFooter(&list.Block, "Enter continue | planned stacks cannot be selected | Esc/b back", false)
 		renderOnboardingChoices(list, "Go is the only implemented stack in this rollout. Node.js, NestJS, Laravel, and PHP are shown as planned until their generators are verified.", width, height)
 	case capabilityPage:
 		updateChoiceList(list, "Optional capabilities · Space toggles", capabilityChoices(view.selection.capabilities), list.SelectedRow, width, height)
-		setFooter(&list.Block, "Space toggle supported item | Enter continue | planned items are disabled | Esc back", false)
+		setFooter(&list.Block, "Space toggle supported item | Enter continue | planned items are disabled | Esc/b back", false)
 		renderOnboardingChoices(list, "Optional integrations are composable. Choose at most one database; skip the step to generate a minimal scaffold.", width, height)
 	case editOptionsPage:
 		updateChoiceList(list, "Adjust your blueprint", editBlueprintChoices(workloadIDAt(view.selectedWorkload)), list.SelectedRow, width, height)
-		setFooter(&list.Block, "Enter edit · Esc review", false)
-		renderOnboardingChoices(list, "Everything here is optional to revisit. Choose one area to adjust, or press Esc to return to your project review.", width, height)
+		setFooter(&list.Block, "Enter edit | Esc/b review", false)
+		renderOnboardingChoices(list, "Everything here is optional to revisit. Choose one area to adjust, or press Esc or b to return to your project review.", width, height)
 	case summaryPage:
 		return true, renderSummaryPage(list, view.selectedShape, view.selectedArchitecture, view.name, view.description, view.projectPath, view.providerConfig, view.selection, "Enter generate project", view.saveError, width, height)
 	case savedPage:
 		return true, renderSavedPage(list, view.selectedShape, view.selectedArchitecture, view.name, view.description, view.projectPath, view.configPath, view.providerConfig, view.selection, width, height)
+	case projectManagePage:
+		renderProjectManagementPage(list, view.reopening, view.validationMessage, width, height)
+		return true, nil
+	case projectDeletePage:
+		renderProjectDeletePage(list, view.reopening, view.validationMessage, width, height)
+		return true, nil
 	default:
 		return false, nil
 	}
@@ -170,9 +176,9 @@ func renderSavedPage(list *widgets.List, selectedShape, selectedArchitecture int
 		"",
 		"Config: "+configPath,
 		"Starter source files were generated.",
-		"Press Esc to return to projects.",
+		"Press Esc or b to return to projects.",
 	)
-	setFooter(&list.Block, "Esc projects | q exit", false)
+	setFooter(&list.Block, "Esc/b projects | q exit", false)
 	ui.Render(list)
 	return nil
 }

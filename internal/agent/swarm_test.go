@@ -100,10 +100,10 @@ func TestAgentDelegatesAndReturnsWorkerResultsToLead(t *testing.T) {
 			t.Errorf("decode provider request: %v", err)
 			return
 		}
-		worker := strings.Contains(request.Messages[0].Content, "verification worker")
+		worker := strings.Contains(request.Messages[0].Content, "You are a Projemble verification worker.")
 		if worker {
-			if len(request.Tools) != 4 {
-				t.Errorf("worker tools = %d, want exactly the four read-only tools", len(request.Tools))
+			if len(request.Tools) != 5 {
+				t.Errorf("worker tools = %d, want exactly five read-only tools", len(request.Tools))
 			}
 			w.Header().Set("Content-Type", "application/json")
 			if len(request.Messages) == 2 {
@@ -121,7 +121,7 @@ func TestAgentDelegatesAndReturnsWorkerResultsToLead(t *testing.T) {
 			_, _ = w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"The invalid check was rejected."}}]}`))
 			return
 		}
-		if len(request.Messages) > 1 && request.Messages[len(request.Messages)-1].Role == "user" {
+		if len(request.Messages) > 1 && request.Messages[len(request.Messages)-1].Role == "user" && !strings.Contains(request.Messages[0].Content, "Spawning 3 verification workers") {
 			found := false
 			for _, tool := range request.Tools {
 				found = found || tool.Function.Name == "delegate_checks"
@@ -133,10 +133,7 @@ func TestAgentDelegatesAndReturnsWorkerResultsToLead(t *testing.T) {
 			_, _ = w.Write([]byte(`{"choices":[{"message":{"role":"assistant","tool_calls":[{"id":"swarm-1","type":"function","function":{"name":"delegate_checks","arguments":"{\"tasks\":[\"verify service A\",\"verify service B\",\"verify API C\"]}"}}]}}]}`))
 			return
 		}
-		found := false
-		for _, message := range request.Messages {
-			found = found || (message.Role == "tool" && strings.Contains(message.Content, "Confirmed assigned check"))
-		}
+		found := strings.Contains(request.Messages[0].Content, "Confirmed assigned check")
 		if !found {
 			t.Error("worker summaries were not returned to the lead")
 		}

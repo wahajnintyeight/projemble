@@ -37,9 +37,9 @@ func needsApproval(mode AccessMode, tool string) bool {
 }
 
 func (mode AccessMode) tools() []string {
-	tools := []string{"list_files", "read_file"}
+	tools := []string{"list_files", "search_files", "read_file"}
 	if mode == AccessFull || mode == AccessAskAlways {
-		tools = append(tools, "write_file", "run_command", "run_shell", "delegate_checks")
+		tools = append(tools, "write_file", "edit_file", "undo_last_edit", "run_command", "run_shell", "delegate_checks")
 	}
 	return tools
 }

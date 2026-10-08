@@ -24,3 +24,14 @@ func launchAgentTurn(session *agent.Agent, workspacePath, secret, prompt string)
 	}()
 	return updates, cancel
 }
+
+func launchAgentCompact(session *agent.Agent, secret, focus string) (chan generationUpdate, context.CancelFunc) {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	updates := make(chan generationUpdate, 32)
+	go func() {
+		reporter := &generationReporter{ctx: ctx, updates: updates, secret: secret}
+		err := session.Compact(ctx, focus, reporter)
+		updates <- generationUpdate{err: err, done: true}
+	}()
+	return updates, cancel
+}

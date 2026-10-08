@@ -21,6 +21,8 @@ type agentWorkspace struct {
 	showSidebar bool
 	navigation  *sessionPanel
 	mentions    *fileMention
+	commands    *slashPalette
+	sessions    *sessionPicker
 }
 
 type workspaceAction struct {
@@ -48,7 +50,7 @@ func newAgentWorkspace() *agentWorkspace {
 	navigation := newSessionPanel()
 	navigation.Border = true
 	navigation.Title = "Navigate"
-	return &agentWorkspace{header: header, transcript: transcript, composer: composer, navigation: navigation, mentions: newFileMention(), showSidebar: true}
+	return &agentWorkspace{header: header, transcript: transcript, composer: composer, navigation: navigation, mentions: newFileMention(), commands: newSlashPalette(), sessions: newSessionPicker(), showSidebar: true}
 }
 
 func (workspace *agentWorkspace) Tick() {

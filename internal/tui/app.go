@@ -36,6 +36,7 @@ func runWithInitializer(initialize func() error) error {
 	defer ui.Close()
 
 	currentPage := homePage
+	history := newPageHistory(currentPage)
 	selectedHome := 0
 	for i, project := range config.Projects {
 		if project.ID == config.LastProjectID {
@@ -129,6 +130,11 @@ func runWithInitializer(initialize func() error) error {
 		generationUpdates, generationCancel = launchAgentTurn(agentSession, projectPath, agentSecret, prompt)
 		generationRunning = true
 	}
+	startAgentCompact := func(focus string) {
+		generationPurpose = "compact"
+		generationUpdates, generationCancel = launchAgentCompact(agentSession, agentSecret, focus)
+		generationRunning = true
+	}
 	navigateWorkspace := func(action workspaceAction) {
 		loaded, loadErr := projectstore.LoadDefault()
 		if loadErr != nil {
@@ -155,10 +161,14 @@ func runWithInitializer(initialize func() error) error {
 			modelInput.Cursor = utf8.RuneCountInString(modelInput.Text)
 		}
 		validationMessage = ""
+		if target == homePage {
+			history.Reset(homePage)
+		}
 		currentPage = target
 	}
 
 	for {
+		history.Observe(currentPage)
 		width, height := ui.TerminalDimensions()
 		if currentPage != lastPage {
 			ui.Clear()
@@ -184,7 +194,7 @@ func runWithInitializer(initialize func() error) error {
 				workspace.Render(width, height, generationRows, providerConfig, projectPath, generationRunning, followAgentActivity, len(pendingPrompts))
 			case accessModePage:
 				updateChoiceList(list, "Agent access mode", accessModeChoices(), selectedAccessMode, width, height)
-				setFooter(&list.Block, "Enter save to YAML | Esc back", false)
+				setFooter(&list.Block, "Enter save to YAML | Esc/b back", false)
 				renderOnboardingChoices(list, "Choose how Projemble may work inside your project. Ask always approves every action. Shell starts in this directory but the OS does not confine it, so each arbitrary shell command requires approval in every mode.", width, height)
 			case approvalPage:
 				if pendingPermission != nil && pendingPermission.permission != nil {
@@ -251,6 +261,8 @@ func runWithInitializer(initialize func() error) error {
 					if generationPurpose == "project" {
 						saveError = "Generation failed: " + errorText
 						generationRows = appendActivity(generationRows, saveError)
+					} else if generationPurpose == "compact" {
+						generationRows = appendActivity(generationRows, "Context compaction failed: "+errorText)
 					} else {
 						generationRows = appendActivity(generationRows, "Agent turn failed: "+errorText)
 					}
@@ -294,8 +306,19 @@ func runWithInitializer(initialize func() error) error {
 			applyChatGPTAuthResult(result, &authPending, &authCancel, models, &providerConfig, modelInput, &currentPage, &validationMessage)
 			continue
 		}
-		event = normalizeEscape(event)
+		event = normalizeKeyEvent(event)
+		if currentPage == agentProgressPage && handleSessionPickerBack(workspace, event) {
+			continue
+		}
+		previousPage := currentPage
 		if handled, message := handleAccessModeInput(event.ID, &currentPage, accessReturnPage, list, &config, &providerConfig, agentSession, &generationRows, &pendingPermission); handled {
+			if currentPage != previousPage {
+				if currentPage == summaryPage {
+					history.Observe(currentPage)
+				} else {
+					history.ReturnTo(currentPage)
+				}
+			}
 			if currentPage == summaryPage {
 				editReturnSummary = false
 			}
@@ -311,6 +334,61 @@ func runWithInitializer(initialize func() error) error {
 			lastPage = page(-1)
 			continue
 		}
+		if isBackNavigationKey(event.ID, currentPage) {
+			if currentPage == aiModelPage && event.ID == "<Escape>" {
+				var consumed bool
+				event, consumed = models.handle(event, modelInput)
+				if consumed {
+					continue
+				}
+			}
+			if currentPage == homePage {
+				return nil
+			}
+			if currentPage == savedPage {
+				if loaded, loadErr := projectstore.LoadDefault(); loadErr != nil {
+					validationMessage = "Could not refresh the project list: " + loadErr.Error()
+				} else {
+					config = loaded
+				}
+				currentPage = homePage
+				history.Reset(homePage)
+				continue
+			}
+			if currentPage == providerPage && authPending {
+				if authCancel != nil {
+					authCancel()
+				}
+				authCancel, authResults, authPending = nil, nil, false
+				validationMessage = "ChatGPT sign-in cancelled. Choose a provider or press Enter to retry."
+				continue
+			}
+			if currentPage == agentProgressPage && generationRunning {
+				continue
+			}
+			leavingAgentSettings := currentPage == providerPage || currentPage == aiModelPage
+			if currentPage == providerPage && editingSettings {
+				editingSettings = false
+				reopening = nil
+				providerConfig = initialGenerationOptions(config)
+			}
+			if currentPage == projectLocationPage {
+				editingLocationFromSummary = false
+			}
+			if !history.BackTo(&currentPage) {
+				currentPage = homePage
+				history.Reset(homePage)
+			}
+			if leavingAgentSettings && currentPage == agentProgressPage && previousOptions != nil {
+				providerConfig = *previousOptions
+				previousOptions, reopening = nil, nil
+			}
+			if currentPage == summaryPage {
+				editReturnSummary = false
+			}
+			validationMessage = ""
+			continue
+		}
 		if currentPage == apiKeyPage || currentPage == aiModelPage || currentPage == projectNamePage || currentPage == projectDescriptionPage || currentPage == projectLocationPage || currentPage == repairPathPage {
 			if currentPage == aiModelPage {
 				var consumed bool
@@ -318,34 +396,14 @@ func runWithInitializer(initialize func() error) error {
 				if consumed {
 					continue
 				}
-				if isEscapeKey(event.ID) && previousOptions != nil {
-					providerConfig = *previousOptions
-					previousOptions, reopening = nil, nil
-					currentPage = agentProgressPage
-					continue
-				}
-			}
-			if currentPage == apiKeyPage && isEscapeKey(event.ID) {
-				currentPage = providerPage
-				validationMessage = ""
-				continue
 			}
 			var nextPage page
 			advance, quit, message := handleTextInput(event, currentPage, nameInput, descriptionInput, locationInput, keyInput, modelInput, &nextPage)
-			if currentPage == aiModelPage && isEscapeKey(event.ID) && providerConfig.Provider == llm.OpenAIWeb {
-				nextPage = providerPage
-			}
 			validationMessage = message
 			if quit {
 				return nil
 			}
 			if advance {
-				if editReturnSummary && isEscapeKey(event.ID) {
-					currentPage = summaryPage
-					editingLocationFromSummary = false
-					editReturnSummary = false
-					continue
-				}
 				switch currentPage {
 				case apiKeyPage:
 					if event.ID != "<Enter>" {
@@ -372,6 +430,7 @@ func runWithInitializer(initialize func() error) error {
 						}
 						editingSettings = false
 						reopening = nil
+						history.Reset(homePage)
 						currentPage = homePage
 						continue
 					}
@@ -416,12 +475,10 @@ func runWithInitializer(initialize func() error) error {
 					projectPath = plannedPath
 					editingLocationFromSummary = false
 					editReturnSummary = false
+					history.ReturnTo(summaryPage)
 					currentPage = summaryPage
 					validationMessage = ""
 					continue
-				}
-				if currentPage == projectLocationPage && event.ID == "<Escape>" {
-					editingLocationFromSummary = false
 				}
 				if editReturnSummary && event.ID == "<Enter>" && (currentPage == projectNamePage || currentPage == projectDescriptionPage) {
 					if currentPage == projectNamePage {
@@ -433,6 +490,7 @@ func runWithInitializer(initialize func() error) error {
 						projectPath = plannedPath
 					}
 					editReturnSummary = false
+					history.ReturnTo(summaryPage)
 					currentPage = summaryPage
 					continue
 				}
@@ -459,6 +517,7 @@ func runWithInitializer(initialize func() error) error {
 						generationRows = appendActivity(generationRows, row)
 					}
 					generationRows = appendActivity(generationRows, "Session restored. Type your next instruction.")
+					history.ReturnTo(agentProgressPage)
 					currentPage = agentProgressPage
 					reopening = nil
 					continue
@@ -474,12 +533,6 @@ func runWithInitializer(initialize func() error) error {
 				currentPage = nextPage
 				validationMessage = ""
 			}
-			continue
-		}
-		if currentPage == providerPage && isEscapeKey(event.ID) && previousOptions != nil && !authPending {
-			providerConfig = *previousOptions
-			previousOptions, reopening = nil, nil
-			currentPage = agentProgressPage
 			continue
 		}
 		if currentPage == agentProgressPage {
@@ -554,6 +607,9 @@ func runWithInitializer(initialize func() error) error {
 				return nil
 			}
 			if action.prompt != "" {
+				if handleSessionCommand(action.prompt, action.queued, agentSession, projectPath, &workspace, &generationRows, &followAgentActivity, startAgentCompact) {
+					continue
+				}
 				if action.queued {
 					if len(pendingPrompts) >= maxPendingPrompts {
 						workspace.composer.Text = action.prompt
@@ -577,6 +633,9 @@ func runWithInitializer(initialize func() error) error {
 			continue
 		}
 
+		if event.ID == "<Enter>" && handleProjectManagementEnter(currentPage, &currentPage, history, &config, &reopening, &providerConfig, &selectedProvider, modelInput, models, &selectedHome, &validationMessage, list) {
+			continue
+		}
 		switch event.ID {
 		case "q", "<C-c>":
 			if currentPage == agentProgressPage && generationRunning {
@@ -650,71 +709,6 @@ func runWithInitializer(initialize func() error) error {
 			} else if currentPage == agentProgressPage {
 				list.ScrollDown()
 				followAgentActivity = list.SelectedRow == len(generationRows)-1
-			}
-		case "<Escape>", "b", "<Backspace>":
-			if editReturnSummary && (currentPage == workloadPage || currentPage == topologyPage || currentPage == architecturePage || currentPage == capabilityPage || currentPage == generationModePage) {
-				editReturnSummary = false
-				currentPage = summaryPage
-				continue
-			}
-			switch currentPage {
-			case homePage:
-				return nil
-			case savedPage:
-				config, err = projectstore.LoadDefault()
-				if err != nil {
-					return err
-				}
-				currentPage = homePage
-			case agentProgressPage:
-				if !generationRunning {
-					currentPage = summaryPage
-				}
-			case appShapePage:
-				currentPage = summaryPage
-			case editOptionsPage:
-				currentPage = summaryPage
-			case capabilityPage:
-				currentPage = stackPage
-			case stackPage:
-				currentPage = architecturePage
-			case architecturePage:
-				if selectedWorkload == workloadIndex(catalog.WorkloadHTTPAPI) {
-					currentPage = topologyPage
-				} else {
-					currentPage = patternPage
-				}
-			case topologyPage:
-				currentPage = patternPage
-			case patternPage:
-				currentPage = workloadPage
-			case workloadPage:
-				currentPage = projectLocationPage
-			case providerPage:
-				if authPending {
-					if authCancel != nil {
-						authCancel()
-					}
-					authCancel = nil
-					authResults = nil
-					authPending = false
-					validationMessage = "ChatGPT sign-in cancelled. Choose a provider or press Enter to retry."
-				} else if editReturnSummary {
-					editReturnSummary = false
-					currentPage = summaryPage
-				} else {
-					currentPage = generationModePage
-					if editingSettings {
-						editingSettings = false
-						reopening = nil
-						providerConfig = initialGenerationOptions(config)
-						currentPage = homePage
-					}
-				}
-			case generationModePage:
-				currentPage = capabilityPage
-			case summaryPage:
-				currentPage = generationModePage
 			}
 		case "<Space>":
 			if currentPage == patternPage {
@@ -790,7 +784,7 @@ func runWithInitializer(initialize func() error) error {
 					list.SelectedRow = 0
 					providerConfig = generationOptions{Mode: "local"}
 					configPath, _ = projectstore.DefaultPath()
-					currentPage = savedPage
+					currentPage = projectManagePage
 					continue
 				}
 				providerConfig = generationOptions{Mode: "agent", AccessMode: initialGenerationOptions(config).AccessMode, Provider: llm.ProviderID(project.AIProvider), Model: project.AIModel, ReasoningEffort: llm.ReasoningEffort(project.ReasoningEffort)}
@@ -988,7 +982,16 @@ func runWithInitializer(initialize func() error) error {
 				providerConfig.APIKey = ""
 				keyInput.Text = ""
 				saveError = ""
-				currentPage = savedPage
+				reopening, err = reloadManagedProject(&config, projectPath)
+				if err != nil {
+					validationMessage = "Project created, but its saved profile could not be loaded: " + err.Error()
+					currentPage = homePage
+					history.Reset(homePage)
+					continue
+				}
+				list.SelectedRow = 0
+				history.Reset(homePage)
+				currentPage = projectManagePage
 			}
 		}
 	}

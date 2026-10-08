@@ -87,7 +87,7 @@ func patternChoices(selected []string) []catalogChoice {
 	for _, item := range items {
 		marker := "[ ] "
 		if contains(selected, item.ID) {
-			marker = "[x] "
+			marker = "[✓] "
 		}
 		choices = append(choices, catalogChoice{name: marker + item.Name, description: item.Description})
 	}
@@ -102,7 +102,7 @@ func capabilityChoices(selected []string) []catalogChoice {
 		if item.Supported {
 			marker = "[ ] "
 			if contains(selected, item.ID) {
-				marker = "[x] "
+				marker = "[✓] "
 			}
 		}
 		choices = append(choices, catalogChoice{name: marker + item.Name, description: item.Category + " - " + item.Description})

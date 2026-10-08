@@ -157,7 +157,7 @@ func handleTextInput(event ui.Event, currentPage page, nameInput, descriptionInp
 }
 
 func isEscapeKey(id string) bool {
-	return id == "<Escape>" || id == "<Esc>" || id == "<Key:Escape>" || id == "<Key:27>" || id == "Escape" || id == "<C-[>" || id == "<C-b>" || id == "\x1b"
+	return id == "<Escape>" || id == "<Esc>" || id == "<Key:Escape>" || id == "<Key:Esc>" || id == "<Key:27>" || id == "Escape" || id == "Esc" || id == "<C-[>" || id == "<C-b>" || id == "\x1b"
 }
 
 func insertRune(input *widgets.Input, value rune, currentPage page) {
@@ -315,7 +315,7 @@ func providerAt(index int) (providerChoice, bool) {
 }
 
 func isChoicePage(current page) bool {
-	return current == homePage || current == generationModePage || current == providerPage || current == workloadPage || current == patternPage || current == topologyPage || current == stackPage || current == capabilityPage || current == editOptionsPage || current == appShapePage || current == architecturePage || current == accessModePage || current == approvalPage
+	return current == homePage || current == generationModePage || current == providerPage || current == workloadPage || current == patternPage || current == topologyPage || current == stackPage || current == capabilityPage || current == editOptionsPage || current == appShapePage || current == architecturePage || current == accessModePage || current == approvalPage || current == projectManagePage || current == projectDeletePage
 }
 
 func editBlueprintChoices(workload string) []catalogChoice {
@@ -384,7 +384,7 @@ func updateSummary(list *widgets.List, name, description string, template catalo
 	}
 	list.SelectedRow = 0
 	list.SelectedStyle = list.TextStyle
-	footer := "e adjust options · Esc back · q quit"
+	footer := "e adjust options | Esc/b back | q quit"
 	if action != "" {
 		footer = action + " · " + footer
 	}

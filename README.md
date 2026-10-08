@@ -95,6 +95,8 @@ File tools and fixed Go commands enforce project-relative paths. A shell command
 
 In the agent workspace, press `Enter` to send, `Ctrl+J` for a new line, `Ctrl+B` to show or hide the session panel, `Ctrl+L` to redraw a broken or misaligned view, `F3` to change provider, `F4` to change model, and `PageUp`/`PageDown` to review the conversation. The `Ctrl+L` refresh is also available during onboarding.
 
+Agent conversations are saved as separate sessions for each project. Type `/` in the message box to open and filter the command menu; use the arrow keys and Enter or Tab to complete a command, then Enter to run it. Use `/compact [focus]` to ask the selected model for a concise continuation summary; Projemble also summarizes automatically when saved context grows past its safety threshold. Use `/new` to start with a clean context or `/new carry` to bring the current summary forward. `/sessions` opens a picker for all saved sessions; choose one and press Enter to resume it. `/resume <id>` remains available from the command menu.
+
 ## CLI commands
 
 ```sh

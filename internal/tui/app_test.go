@@ -255,7 +255,7 @@ func TestActivityRowsUseDistinctSemanticColors(t *testing.T) {
 		line, want, absent string
 		color              ui.Color
 	}{
-		{"Waiting on mistral model test-model (request 1/64)", "[... think](fg:" + colorThinking, "Waiting on", ui.ColorViolet},
+		{"Waiting on mistral model test-model", "[... think](fg:" + colorThinking, "Waiting on", ui.ColorViolet},
 		{"Action: Writing internal/app.go", "[> write](fg:" + colorChanged, "Action:", ui.ColorGold},
 		{"Action: Running go test ./...", "[> run](fg:" + colorCheck, "Action:", ui.ColorLightBlue},
 		{"Created internal/app.go", "[+ created](fg:" + colorAdded, "Created", ui.ColorGreen},

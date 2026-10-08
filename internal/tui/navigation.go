@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"github.com/gdamore/tcell/v3"
 	ui "github.com/metaspartan/gotui/v5"
 	"projemble/internal/catalog"
 	"projemble/internal/llm"
@@ -8,6 +9,84 @@ import (
 )
 
 type page int
+
+func isTextInputPage(current page) bool {
+	switch current {
+	case apiKeyPage, aiModelPage, projectNamePage, projectDescriptionPage, projectLocationPage, repairPathPage:
+		return true
+	default:
+		return false
+	}
+}
+
+func isSecondaryBackKey(id string) bool { return id == "b" || id == "B" || id == "<Backspace>" }
+
+func isBackNavigationKey(id string, current page) bool {
+	return id == "<Escape>" || (isSecondaryBackKey(id) && !isTextInputPage(current) && current != agentProgressPage && current != homePage)
+}
+
+type pageHistory struct {
+	current page
+	stack   []page
+}
+
+func newPageHistory(initial page) *pageHistory { return &pageHistory{current: initial} }
+
+func (h *pageHistory) Observe(next page) {
+	if next != h.current {
+		if next == summaryPage {
+			for _, previous := range h.stack {
+				if previous == summaryPage {
+					h.ReturnTo(summaryPage)
+					return
+				}
+			}
+		}
+		h.stack = append(h.stack, h.current)
+		h.current = next
+	}
+}
+
+func (h *pageHistory) Back() (page, bool) {
+	if len(h.stack) == 0 {
+		return h.current, false
+	}
+	last := len(h.stack) - 1
+	h.current = h.stack[last]
+	h.stack = h.stack[:last]
+	return h.current, true
+}
+
+func (h *pageHistory) BackTo(current *page) bool {
+	target, ok := h.Back()
+	if ok {
+		*current = target
+	}
+	return ok
+}
+
+func (h *pageHistory) ReturnTo(target page) {
+	if h.current == target {
+		return
+	}
+	found := false
+	for i := len(h.stack) - 1; i >= 0; i-- {
+		if h.stack[i] == target {
+			h.stack = h.stack[:i]
+			found = true
+			break
+		}
+	}
+	if !found {
+		h.stack = nil
+	}
+	h.current = target
+}
+
+func (h *pageHistory) Reset(target page) {
+	h.current = target
+	h.stack = nil
+}
 
 const (
 	generationModePage page = iota
@@ -32,6 +111,8 @@ const (
 	repairPathPage
 	accessModePage
 	approvalPage
+	projectManagePage
+	projectDeletePage
 )
 
 const (
@@ -42,8 +123,14 @@ const (
 	maxModelRunes       = 128
 )
 
-// Keep Ctrl+B available to toggle the workspace sidebar.
-func normalizeEscape(event ui.Event) ui.Event {
+// Canonicalize key IDs while keeping Ctrl+B available for the sidebar toggle.
+func normalizeKeyEvent(event ui.Event) ui.Event {
+	if key, ok := event.Payload.(*tcell.EventKey); ok && key.Key() == tcell.KeyEsc {
+		event.ID = "<Escape>"
+	}
+	if event.ID == " " {
+		event.ID = "<Space>"
+	}
 	if event.ID != "<C-b>" && isEscapeKey(event.ID) {
 		event.ID = "<Escape>"
 	}

@@ -68,12 +68,12 @@ The implemented repair adds a project home, remembered directory/selection, OS c
 | Project profiles/default provider/model/directory | Existing user YAML, optional added fields | Provider profiles, richer lifecycle transitions |
 | API keys | Plaintext `provider_keys` map in user YAML; YAML value is preferred, environment variable is fallback | Encrypted secret storage if the user chooses it later |
 | ChatGPT credentials | Existing authentication service | Surface expiration/reconnect status |
-| Conversation/tool messages/usage/recent activity | Atomic JSON checkpoint per workspace in user config directory | Multiple named sessions, retention/export |
+| Conversation/tool messages/usage/recent activity | Atomic JSON checkpoints per named session plus an active-session index in user config directory | Retention/export |
 | Drafts/queued instructions/panel state | Process-local | Durable UI state, queue recovery requiring explicit resume |
 
 The user requested API keys in YAML for simpler setup. This is implemented as plaintext under `provider_keys`. Keep that config private and out of source control. Environment variables are a fallback when no YAML value exists. Unix writes set the config file to owner read/write; Windows file permissions inherit the user config directory ACL.
 
-Checkpoints are capped at 16 MiB, use same-directory temporary files and rename, and redact the configured API key. They contain conversation/file/tool content and therefore deserve the same privacy treatment as the project. Current single-workspace checkpoints do not support concurrent writers or multiple sessions; use an indexed transactional store when those features arrive.
+Checkpoints are capped at 16 MiB, use same-directory temporary files and rename, and redact the configured API key. They contain conversation/file/tool content and therefore deserve the same privacy treatment as the project. Named sessions are indexed per workspace; concurrent writers are not supported, so only one active TUI process should write a given project session at a time.
 
 ## Framework prototype acceptance gate
 

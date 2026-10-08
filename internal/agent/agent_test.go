@@ -42,18 +42,18 @@ func TestRunUsesWorkspaceToolsAndEngineeringPrompt(t *testing.T) {
 			t.Errorf("decode request: %v", err)
 			return
 		}
-		if request.ToolChoice != "auto" || len(request.Tools) != 6 {
+		if request.ToolChoice != "auto" || len(request.Tools) != 9 {
 			t.Errorf("tools not enabled: mode=%q count=%d", request.ToolChoice, len(request.Tools))
 		}
 		if requestCount == 1 {
-			if !strings.Contains(request.Messages[0].Content, "Never overwrite user data outside the workspace") {
+			if !strings.Contains(request.Messages[0].Content, "File tools enforce workspace boundaries") {
 				t.Errorf("engineering prompt was not included")
 			}
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write([]byte(`{"choices":[{"message":{"role":"assistant","tool_calls":[{"id":"call1","type":"function","function":{"name":"write_file","arguments":"{\"path\":\"note.txt\",\"content\":\"generated\"}"}}]}}]}`))
 			return
 		}
-		if !strings.Contains(request.Messages[len(request.Messages)-1].Content, "Created note.txt") {
+		if !strings.Contains(request.Messages[0].Content, "Created note.txt") {
 			t.Errorf("tool result was not sent back to provider")
 		}
 		w.Header().Set("Content-Type", "application/json")
@@ -72,7 +72,7 @@ func TestRunUsesWorkspaceToolsAndEngineeringPrompt(t *testing.T) {
 	if requestCount != 2 || !strings.Contains(output.String(), "checked the workspace") {
 		t.Fatalf("provider loop incomplete: requests=%d output=%q", requestCount, output.String())
 	}
-	for _, activity := range []string{"Waiting on openai model test-model", "Writing note.txt", "Created note.txt", "Agent summary:"} {
+	for _, activity := range []string{"Waiting on openai model test-model", "Creating note.txt", "Created note.txt", "Agent summary:"} {
 		if !strings.Contains(output.String(), activity) {
 			t.Errorf("activity output missing %q:\n%s", activity, output.String())
 		}
@@ -86,15 +86,23 @@ func TestRunUsesWorkspaceToolsAndEngineeringPrompt(t *testing.T) {
 	}
 }
 
-func TestWriteFileDistinguishesCreatedFromUpdated(t *testing.T) {
+func TestWriteFileCreatesOnlyAndEditReturnsDiff(t *testing.T) {
 	t.Setenv("APPDATA", t.TempDir())
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	root := t.TempDir()
 	if result, err := writeFile(root, "new.txt", "first"); err != nil || result != "Created new.txt" {
 		t.Fatalf("new file result = %q, err=%v", result, err)
 	}
-	if result, err := writeFile(root, "new.txt", "second"); err != nil || result != "Updated new.txt" {
-		t.Fatalf("updated file result = %q, err=%v", result, err)
+	if _, err := writeFile(root, "new.txt", "second"); err == nil {
+		t.Fatal("write_file replaced an existing file")
+	}
+	result, err := editFile(root, "new.txt", "first", "second", nil)
+	if err != nil || !strings.Contains(result, "-first\n+second") {
+		t.Fatalf("edit diff = %q, err=%v", result, err)
+	}
+	contents, err := os.ReadFile(filepath.Join(root, "new.txt"))
+	if err != nil || string(contents) != "second" {
+		t.Fatalf("edit content = %q, err=%v", contents, err)
 	}
 }
 
@@ -198,12 +206,7 @@ func TestTurnKeepsConversationForFollowupPrompts(t *testing.T) {
 			return
 		}
 		if requestCount == 2 {
-			foundPreviousReply := false
-			for _, message := range request.Messages {
-				if message.Role == "assistant" && message.Content == "The starter is ready." {
-					foundPreviousReply = true
-				}
-			}
+			foundPreviousReply := strings.Contains(request.Messages[0].Content, "The starter is ready.")
 			if !foundPreviousReply || request.Messages[len(request.Messages)-1].Content != "Now add a health endpoint." {
 				t.Errorf("follow-up did not include conversation history: %+v", request.Messages)
 			}
@@ -257,6 +260,53 @@ func TestRunAllowsMoreThanSixteenToolRoundsAndFinalResponse(t *testing.T) {
 	}
 	if requestCount != 19 || !strings.Contains(output.String(), "Finished after inspecting") {
 		t.Fatalf("agent did not complete after tool rounds: requests=%d output=%q", requestCount, output.String())
+	}
+}
+
+func TestToolBatchAboveTenDefersRemainderAndCompactsContext(t *testing.T) {
+	t.Setenv("APPDATA", t.TempDir())
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	workspace := t.TempDir()
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		w.Header().Set("Content-Type", "application/json")
+		if requests == 1 {
+			calls := make([]map[string]any, 11)
+			for index := range calls {
+				calls[index] = map[string]any{
+					"id": fmt.Sprintf("call-%d", index+1), "type": "function",
+					"function": map[string]string{"name": "list_files", "arguments": `{"path":"."}`},
+				}
+			}
+			body, _ := json.Marshal(map[string]any{"choices": []any{map[string]any{"message": map[string]any{"role": "assistant", "tool_calls": calls}}}})
+			_, _ = w.Write(body)
+			return
+		}
+		var request struct {
+			Messages []struct {
+				Role    string `json:"role"`
+				Content string `json:"content"`
+			} `json:"messages"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Errorf("decode compacted request: %v", err)
+		} else if len(request.Messages) != 2 || !strings.Contains(request.Messages[0].Content, "deferred") {
+			t.Errorf("tool batch was not compacted with the deferred action: %+v", request.Messages)
+		}
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"Finished the batched inspection."}}]}`))
+	}))
+	defer server.Close()
+	client, err := New(Config{ProviderID: llm.OpenAI, BaseURL: server.URL, Model: "test-model", APIKey: "test-key", AccessMode: AccessFull, Client: server.Client()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var output strings.Builder
+	if err := client.Run(context.Background(), workspace, "Inspect the workspace", &output); err != nil {
+		t.Fatal(err)
+	}
+	if requests != 2 || !strings.Contains(output.String(), "Deferred tool action") || !strings.Contains(output.String(), "Finished the batched inspection") {
+		t.Fatalf("batch did not recover: requests=%d output=%q", requests, output.String())
 	}
 }
 
@@ -321,7 +371,7 @@ func TestLocalProviderMayOmitAPIKey(t *testing.T) {
 func TestReadOnlyModeHidesAndRejectsWriteTools(t *testing.T) {
 	root := t.TempDir()
 	tools := llmToolsForAccess(AccessReadOnly)
-	if len(tools) != 2 || tools[0].Name != "list_files" || tools[1].Name != "read_file" {
+	if len(tools) != 3 || tools[0].Name != "list_files" || tools[1].Name != "search_files" || tools[2].Name != "read_file" {
 		t.Fatalf("read-only tools = %+v", tools)
 	}
 	write := []llm.ToolCall{{ID: "write", Name: "write_file", Arguments: `{"path":"note.txt","content":"no"}`}}
@@ -335,8 +385,8 @@ func TestReadOnlyModeHidesAndRejectsWriteTools(t *testing.T) {
 	if err := validateToolCallsForAccess(root, delegate, false, AccessReadOnly); err == nil {
 		t.Fatal("read-only mode accepted worker execution")
 	}
-	if got := len(llmToolsForAccess(AccessAskAlways)); got != 6 {
-		t.Fatalf("ask-always tools = %d, want read/write/Go/shell/swarm operations", got)
+	if got := len(llmToolsForAccess(AccessAskAlways)); got != 9 {
+		t.Fatalf("ask-always tools = %d, want discovery/edit/Go/shell/swarm operations", got)
 	}
 }
 
@@ -383,7 +433,7 @@ func TestAskAlwaysPromptsBeforeReadingProjectFile(t *testing.T) {
 		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
 			t.Errorf("decode follow-up request: %v", err)
 		}
-		if !strings.Contains(request.Messages[len(request.Messages)-1].Content, "project note") {
+		if !strings.Contains(request.Messages[0].Content, "project note") {
 			t.Errorf("approved read result was not returned to model: %+v", request.Messages)
 		}
 		_, _ = w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"Read the note."}}]}`))
@@ -424,7 +474,7 @@ func TestFullAccessPromptsBeforeUnconfinedShell(t *testing.T) {
 	defer server.Close()
 	approver := permissionApproverFunc(func(_ context.Context, request PermissionRequest) (bool, error) {
 		approvals++
-		if request.Action != "Run shell command" || request.Target != "echo safe-check" {
+		if request.Action != "Run shell command (not OS-confined to project)" || !strings.HasPrefix(request.Target, "echo safe-check | starts in project") {
 			t.Errorf("shell approval = %+v", request)
 		}
 		return true, nil

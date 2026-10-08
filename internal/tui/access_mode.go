@@ -86,6 +86,6 @@ func renderPermissionPrompt(list *widgets.List, request agent.PermissionRequest,
 	}
 	banner := onboardingBanner("Projemble / Permission request", intro, width, height)
 	list.SetRect(0, banner.Max.Y, width, height)
-	setFooter(&list.Block, "Enter selected action | Esc deny (Deny selected by default)", false)
+	setFooter(&list.Block, "Enter selected action | Esc/b deny (Deny selected by default)", false)
 	ui.Render(banner, list)
 }

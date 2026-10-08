@@ -20,7 +20,7 @@ const (
 	maxDirectoryEntries  = 10_000
 )
 
-func runTool(ctx context.Context, root, name, raw, secretEnvName, secret string, output io.Writer) (string, error) {
+func runTool(ctx context.Context, root, name, raw, secretEnvName, secret string, output io.Writer, history *[]editSnapshot) (string, error) {
 	switch name {
 	case "list_files":
 		args, err := decodeToolArgs(raw, []string{"path"}, []string{"path"})
@@ -29,17 +29,34 @@ func runTool(ctx context.Context, root, name, raw, secretEnvName, secret string,
 		}
 		return listFiles(root, args["path"])
 	case "read_file":
-		args, err := decodeToolArgs(raw, []string{"path"}, []string{"path"})
+		args, err := decodeReadFileArguments(raw)
 		if err != nil {
 			return "", err
 		}
-		return readFile(root, args["path"])
+		return readFileRange(root, args["path"], parseOptionalLine(args["start_line"]), parseOptionalLine(args["end_line"]))
+	case "search_files":
+		args, err := decodeSearchArguments(raw)
+		if err != nil {
+			return "", err
+		}
+		return searchFiles(root, args["path"], args["query"])
 	case "write_file":
 		args, err := decodeToolArgs(raw, []string{"path", "content"}, []string{"path", "content"})
 		if err != nil {
 			return "", err
 		}
-		return writeFile(root, args["path"], args["content"])
+		return createFile(root, args["path"], args["content"], history)
+	case "edit_file":
+		args, err := decodeToolArgs(raw, []string{"path", "old_text", "new_text"}, []string{"path", "old_text", "new_text"})
+		if err != nil {
+			return "", err
+		}
+		return editFile(root, args["path"], args["old_text"], args["new_text"], history)
+	case "undo_last_edit":
+		if _, err := decodeToolObject(raw, nil); err != nil {
+			return "", err
+		}
+		return undoLastEdit(root, history)
 	case "run_go_check":
 		args, err := decodeToolArgs(raw, []string{"check"}, []string{"check"})
 		if err != nil {
@@ -81,7 +98,7 @@ func decodeToolArgs(raw string, required, allowed []string) (map[string]string, 
 	}
 	for _, field := range required {
 		value, ok := args[field]
-		if !ok || (field != "content" && strings.TrimSpace(value) == "") {
+		if !ok || (field != "content" && field != "new_text" && strings.TrimSpace(value) == "") {
 			return nil, fmt.Errorf("required tool argument %q is missing or empty", field)
 		}
 	}
@@ -181,11 +198,15 @@ func validateToolCallsForAccess(root string, calls []llm.ToolCall, idOptional bo
 		if err != nil {
 			return err
 		}
-		if mode == AccessReadOnly && call.Name != "list_files" && call.Name != "read_file" {
+		if mode == AccessReadOnly && call.Name != "list_files" && call.Name != "read_file" && call.Name != "search_files" {
 			return fmt.Errorf("read-only mode blocks %s", call.Name)
 		}
-		if call.Name == "list_files" || call.Name == "read_file" || call.Name == "write_file" {
-			if _, err := safePath(root, args["path"]); err != nil {
+		if call.Name == "list_files" || call.Name == "read_file" || call.Name == "write_file" || call.Name == "edit_file" || call.Name == "search_files" {
+			name := args["path"]
+			if name == "" {
+				name = "."
+			}
+			if _, err := safePath(root, name); err != nil {
 				return fmt.Errorf("%s path rejected: %w", call.Name, err)
 			}
 		}
@@ -206,16 +227,35 @@ func validateToolCallsForAccess(root string, calls []llm.ToolCall, idOptional bo
 				return fmt.Errorf("write_file content exceeds %d bytes", maxFileBytes)
 			}
 		}
+		if call.Name == "edit_file" {
+			if isProtectedWritePath(args["path"]) {
+				return errors.New("project instructions and agent control files are protected from automatic edits")
+			}
+			if args["old_text"] == "" || len(args["old_text"]) > maxFileBytes || len(args["new_text"]) > maxFileBytes {
+				return fmt.Errorf("edit_file requires non-empty old_text and text fields no larger than %d bytes", maxFileBytes)
+			}
+		}
 	}
 	return nil
 }
 
 func validateArgumentsOnly(name, raw string) (map[string]string, error) {
 	switch name {
-	case "list_files", "read_file":
+	case "list_files":
 		return decodeToolArgs(raw, []string{"path"}, []string{"path"})
+	case "read_file":
+		return decodeReadFileArguments(raw)
+	case "search_files":
+		return decodeSearchArguments(raw)
 	case "write_file":
 		return decodeToolArgs(raw, []string{"path", "content"}, []string{"path", "content"})
+	case "edit_file":
+		return decodeToolArgs(raw, []string{"path", "old_text", "new_text"}, []string{"path", "old_text", "new_text"})
+	case "undo_last_edit":
+		if _, err := decodeToolObject(raw, nil); err != nil {
+			return nil, err
+		}
+		return map[string]string{}, nil
 	case "run_go_check":
 		args, err := decodeToolArgs(raw, []string{"check"}, []string{"check"})
 		if err != nil {
@@ -281,17 +321,47 @@ func toolAction(name, raw string) string {
 		}
 		return "Running shell in project: " + command
 	}
+	if name == "read_file" {
+		args, err := decodeReadFileArguments(raw)
+		if err != nil {
+			return "Reading project file"
+		}
+		if args["start_line"] != "" || args["end_line"] != "" {
+			start, end := args["start_line"], args["end_line"]
+			if start == "" {
+				start = "1"
+			}
+			if end == "" {
+				end = "next 200 lines"
+			}
+			return "Reading " + cleanPermissionTarget(args["path"]) + " lines " + start + "-" + end
+		}
+		return "Reading " + cleanPermissionTarget(args["path"])
+	}
+	if name == "search_files" {
+		args, err := decodeSearchArguments(raw)
+		if err != nil {
+			return "Searching project files"
+		}
+		return "Searching " + cleanPermissionTarget(args["path"]) + " for " + cleanPermissionTarget(args["query"])
+	}
 	var args map[string]string
 	if err := json.Unmarshal([]byte(raw), &args); err != nil {
 		return "Calling " + name
 	}
 	switch name {
 	case "list_files":
-		return "Listing files in " + args["path"]
+		return "Listing files in " + cleanPermissionTarget(args["path"])
 	case "read_file":
-		return "Reading " + args["path"]
+		return "Reading " + cleanPermissionTarget(args["path"])
+	case "search_files":
+		return "Searching project files"
 	case "write_file":
-		return "Writing " + args["path"]
+		return "Creating " + cleanPermissionTarget(args["path"])
+	case "edit_file":
+		return "Editing " + cleanPermissionTarget(args["path"])
+	case "undo_last_edit":
+		return "Undoing the last agent edit"
 	case "run_go_check":
 		return "Running go " + args["check"] + " ./..."
 	default:
@@ -334,7 +404,11 @@ func toolOutcome(name, raw, result string) string {
 		return result
 	}
 	var args map[string]string
-	_ = json.Unmarshal([]byte(raw), &args)
+	if name == "read_file" {
+		args, _ = decodeReadFileArguments(raw)
+	} else {
+		_ = json.Unmarshal([]byte(raw), &args)
+	}
 	switch name {
 	case "list_files":
 		count := 0
@@ -346,8 +420,18 @@ func toolOutcome(name, raw, result string) string {
 		return fmt.Sprintf("Listed %d project files", count)
 	case "read_file":
 		return fmt.Sprintf("Read %s (%d bytes)", args["path"], len(result))
+	case "search_files":
+		count := 0
+		for _, line := range strings.Split(result, "\n") {
+			if strings.Contains(line, ":") && !strings.HasPrefix(line, "[") {
+				count++
+			}
+		}
+		return fmt.Sprintf("Found %d code matches", count)
 	case "write_file":
 		return fmt.Sprintf("%s (%d bytes)", result, len(args["content"]))
+	case "edit_file", "undo_last_edit":
+		return result
 	default:
 		return result
 	}
@@ -355,22 +439,45 @@ func toolOutcome(name, raw, result string) string {
 
 func permissionForTool(name, raw string) (PermissionRequest, error) {
 	switch name {
-	case "list_files", "read_file":
-		args, err := decodeToolArgs(raw, []string{"path"}, []string{"path"})
+	case "list_files", "read_file", "search_files":
+		var args map[string]string
+		var err error
+		if name == "read_file" {
+			args, err = decodeReadFileArguments(raw)
+		} else if name == "search_files" {
+			args, err = decodeSearchArguments(raw)
+		} else {
+			args, err = decodeToolArgs(raw, []string{"path"}, []string{"path"})
+		}
 		if err != nil {
 			return PermissionRequest{}, err
 		}
-		action := "Read project directory"
+		action, target := "Read project directory", args["path"]
 		if name == "read_file" {
 			action = "Read project file"
+		} else if name == "search_files" {
+			action = "Search project files"
+			target += " for " + args["query"]
 		}
-		return PermissionRequest{Action: action, Target: cleanPermissionTarget(args["path"])}, nil
+		return PermissionRequest{Action: action, Target: cleanPermissionTarget(target)}, nil
 	case "write_file":
 		args, err := decodeToolArgs(raw, []string{"path", "content"}, []string{"path", "content"})
 		if err != nil {
 			return PermissionRequest{}, err
 		}
-		return PermissionRequest{Action: "Write project file", Target: cleanPermissionTarget(args["path"])}, nil
+		return PermissionRequest{Action: "Create project file", Target: cleanPermissionTarget(args["path"])}, nil
+	case "edit_file":
+		args, err := decodeToolArgs(raw, []string{"path", "old_text", "new_text"}, []string{"path", "old_text", "new_text"})
+		if err != nil {
+			return PermissionRequest{}, err
+		}
+		target := filepath.ToSlash(args["path"]) + " | - " + truncateUTF8(args["old_text"], 72) + " + " + truncateUTF8(args["new_text"], 72)
+		return PermissionRequest{Action: "Review and apply file patch", Target: cleanPermissionTarget(target)}, nil
+	case "undo_last_edit":
+		if _, err := decodeToolObject(raw, nil); err != nil {
+			return PermissionRequest{}, err
+		}
+		return PermissionRequest{Action: "Undo last agent edit", Target: "Restore the file only if it has not changed since the edit"}, nil
 	case "run_command":
 		args, runtimeArgs, err := decodeRunCommandArguments(raw)
 		if err != nil {
@@ -386,7 +493,7 @@ func permissionForTool(name, raw string) (PermissionRequest, error) {
 		if len(command) > 160 {
 			command = command[:160] + "..."
 		}
-		return PermissionRequest{Action: "Run shell command", Target: cleanPermissionTarget(command)}, nil
+		return PermissionRequest{Action: "Run shell command (not OS-confined to project)", Target: cleanPermissionTarget(command + " | starts in project; may access other paths")}, nil
 	case "delegate_checks":
 		tasks, err := decodeSwarmTasks(raw)
 		if err != nil {
@@ -449,17 +556,22 @@ func listFiles(root, name string) (string, error) {
 		if entries > maxDirectoryEntries {
 			return filepath.SkipAll
 		}
-		if entry.IsDir() && current != path && (entry.Name() == ".git" || entry.Name() == ".projemble" || entry.Name() == ".codex" || entry.Name() == "node_modules" || entry.Name() == "vendor") {
-			return filepath.SkipDir
+		if entry.IsDir() && current != path {
+			rel, relErr := filepath.Rel(root, current)
+			if skipProjectDirectory(entry.Name()) || (relErr == nil && (isCredentialPath(rel) || isPrivateControlPath(rel))) {
+				return filepath.SkipDir
+			}
 		}
 		if !entry.IsDir() {
+			rel, err := filepath.Rel(root, current)
+			if err != nil || isCredentialPath(rel) || isPrivateControlPath(rel) {
+				return nil
+			}
 			count++
 			if count > 1000 {
 				return filepath.SkipAll
 			}
-			if rel, err := filepath.Rel(root, current); err == nil {
-				fmt.Fprintln(&result, filepath.ToSlash(rel))
-			}
+			fmt.Fprintln(&result, filepath.ToSlash(rel))
 		}
 		return nil
 	})
@@ -475,57 +587,8 @@ func listFiles(root, name string) (string, error) {
 	return result.String(), nil
 }
 
-func readFile(root, name string) (string, error) {
-	path, err := safePath(root, name)
-	if err != nil {
-		return "", err
-	}
-	info, err := os.Stat(path)
-	if err != nil {
-		return "", err
-	}
-	if !info.Mode().IsRegular() {
-		return "", errors.New("only regular project files can be read")
-	}
-	if info.Size() > maxFileBytes {
-		return "", fmt.Errorf("file exceeds %d bytes", maxFileBytes)
-	}
-	contents, err := os.ReadFile(path)
-	return string(contents), err
-}
-
 func writeFile(root, name, content string) (string, error) {
-	if len(content) > maxFileBytes {
-		return "", fmt.Errorf("file exceeds %d bytes", maxFileBytes)
-	}
-	path, err := safePath(root, name)
-	if err != nil {
-		return "", err
-	}
-	if isProtectedWritePath(name) {
-		return "", errors.New("project instructions and agent control files are protected from automatic edits")
-	}
-	_, statErr := os.Stat(path)
-	created := errors.Is(statErr, os.ErrNotExist)
-	if statErr != nil && !created {
-		return "", statErr
-	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return "", err
-	}
-	// Recheck after creating parents so a raced symlink cannot redirect the write.
-	path, err = safePath(root, name)
-	if err != nil {
-		return "", err
-	}
-	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
-		return "", err
-	}
-	verb := "Updated "
-	if created {
-		verb = "Created "
-	}
-	return verb + filepath.ToSlash(name), nil
+	return createFile(root, name, content, nil)
 }
 
 func isPrivateControlPath(path string) bool {

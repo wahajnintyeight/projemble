@@ -183,7 +183,7 @@ func (p *modelPicker) render(input *widgets.Input, width, height int, validation
 	ui.Render(p.search, p.list)
 }
 func (p *modelPicker) handle(event ui.Event, input *widgets.Input) (ui.Event, bool) {
-	event = normalizeEscape(event)
+	event = normalizeKeyEvent(event)
 	if p.custom {
 		if isEscapeKey(event.ID) {
 			p.custom = false

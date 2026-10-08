@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"projemble/internal/llm"
 )
@@ -19,9 +20,15 @@ const maxSessionBytes = 16 << 20
 type savedSession struct {
 	Version    int
 	Workspace  string
+	SessionID  string
+	Title      string
+	CreatedAt  time.Time
+	UpdatedAt  time.Time
 	Messages   []llm.Message
 	Activities []string
 	Usage      llm.Usage
+	Summary    string
+	Undo       []editSnapshot
 }
 
 func sessionPath(workspace string) (string, error) {
@@ -39,47 +46,127 @@ func sessionPath(workspace string) (string, error) {
 
 // Restore loads a completed conversation checkpoint. Credentials remain in the provider.
 func (agent *Agent) Restore(workspace string) error {
-	path, err := sessionPath(workspace)
-	if err != nil {
-		return err
-	}
-	file, err := os.Open(path)
-	if errors.Is(err, os.ErrNotExist) {
-		return nil
-	}
-	if err != nil {
-		return err
-	}
-	defer file.Close()
-	data, err := io.ReadAll(io.LimitReader(file, maxSessionBytes+1))
-	if err != nil {
-		return err
-	}
-	if len(data) > maxSessionBytes {
-		return errors.New("saved session exceeds 16 MiB")
-	}
-	var state savedSession
-	if err := json.Unmarshal(data, &state); err != nil {
-		return fmt.Errorf("read saved session: %w", err)
-	}
 	root, err := filepath.Abs(workspace)
 	if err != nil {
 		return err
 	}
-	if state.Version != 1 || state.Workspace != root {
+	agent.workspace = root
+	index, err := readSessionIndex(root)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	if index.ActiveID != "" {
+		return agent.restoreSession(root, index.ActiveID)
+	}
+	legacyPath, err := sessionPath(root)
+	if err != nil {
+		return err
+	}
+	legacy, legacyErr := readSavedSession(legacyPath)
+	if legacyErr == nil {
+		if err := agent.restoreState(legacy); err != nil {
+			return err
+		}
+		if agent.sessionID == "" {
+			agent.sessionID, err = newSessionID()
+			if err != nil {
+				return err
+			}
+		}
+		return agent.checkpoint()
+	}
+	if !errors.Is(legacyErr, os.ErrNotExist) {
+		return legacyErr
+	}
+	agent.sessionID, err = newSessionID()
+	if err != nil {
+		return err
+	}
+	agent.sessionCreated = time.Now().UTC()
+	return agent.checkpoint()
+}
+
+func readSavedSession(path string) (savedSession, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return savedSession{}, err
+	}
+	defer file.Close()
+	data, err := io.ReadAll(io.LimitReader(file, maxSessionBytes+1))
+	if err != nil {
+		return savedSession{}, err
+	}
+	if len(data) > maxSessionBytes {
+		return savedSession{}, errors.New("saved session exceeds 16 MiB")
+	}
+	var state savedSession
+	if err := json.Unmarshal(data, &state); err != nil {
+		return savedSession{}, fmt.Errorf("read saved session: %w", err)
+	}
+	return state, nil
+}
+
+func (agent *Agent) restoreSession(root, id string) error {
+	path, err := sessionFilePath(root, id)
+	if err != nil {
+		return err
+	}
+	state, err := readSavedSession(path)
+	if err != nil {
+		return err
+	}
+	if state.SessionID != "" && state.SessionID != id {
+		return errors.New("saved session ID mismatch")
+	}
+	return agent.restoreState(state)
+}
+
+func (agent *Agent) restoreState(state savedSession) error {
+	if state.Version != 1 || state.Workspace != agent.workspace {
 		return errors.New("saved session workspace or version mismatch")
 	}
-	agent.workspace, agent.messages = root, state.Messages
+	agent.sessionID, agent.sessionTitle = state.SessionID, state.Title
+	agent.sessionCreated, agent.sessionUpdated = state.CreatedAt, state.UpdatedAt
 	agent.activities, agent.usage = state.Activities, state.Usage
+	agent.undoHistory = restoreUndoHistory(agent.workspace, state.Undo)
+	agent.summary, agent.messages = "", nil
+	if state.Summary == "" {
+		pending := len(state.Messages) > 0 && state.Messages[len(state.Messages)-1].Role == "user"
+		pendingUser := lastUserMessage(state.Messages)
+		agent.remember(summarizeLegacyMessages(state.Messages))
+		agent.messages = nil
+		agent.refreshSystemPrompt()
+		if pending {
+			agent.messages = append(agent.messages, llm.Message{Role: "user", Content: pendingUser})
+		}
+	} else {
+		agent.summary, agent.messages = state.Summary, state.Messages
+		agent.refreshSystemPrompt()
+	}
 	return nil
 }
 
 func (agent *Agent) checkpoint() error {
-	path, err := sessionPath(agent.workspace)
+	if agent.sessionID == "" {
+		var err error
+		agent.sessionID, err = newSessionID()
+		if err != nil {
+			return err
+		}
+	}
+	if agent.config.APIKey != "" {
+		agent.sessionTitle = strings.ReplaceAll(agent.sessionTitle, agent.config.APIKey, "[REDACTED]")
+	}
+	now := time.Now().UTC()
+	if agent.sessionCreated.IsZero() {
+		agent.sessionCreated = now
+	}
+	agent.sessionUpdated = now
+	path, err := sessionFilePath(agent.workspace, agent.sessionID)
 	if err != nil {
 		return err
 	}
-	data, err := json.Marshal(savedSession{Version: 1, Workspace: agent.workspace, Messages: agent.messages, Activities: agent.activities, Usage: agent.usage})
+	data, err := json.Marshal(savedSession{Version: 1, Workspace: agent.workspace, SessionID: agent.sessionID, Title: agent.sessionTitle, CreatedAt: agent.sessionCreated, UpdatedAt: agent.sessionUpdated, Messages: agent.messages, Activities: agent.activities, Usage: agent.usage, Summary: agent.summary, Undo: agent.undoHistory})
 	if err != nil {
 		return err
 	}
@@ -91,30 +178,10 @@ func (agent *Agent) checkpoint() error {
 	if len(data) > maxSessionBytes {
 		return errors.New("conversation exceeds 16 MiB; checkpoint was not saved")
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+	if err := atomicSessionWrite(path, data); err != nil {
 		return err
 	}
-	file, err := os.CreateTemp(filepath.Dir(path), ".session-*.tmp")
-	if err != nil {
-		return err
-	}
-	defer os.Remove(file.Name())
-	if err := file.Chmod(0600); err != nil {
-		file.Close()
-		return err
-	}
-	if _, err := file.Write(data); err != nil {
-		file.Close()
-		return err
-	}
-	if err := file.Sync(); err != nil {
-		file.Close()
-		return err
-	}
-	if err := file.Close(); err != nil {
-		return err
-	}
-	return os.Rename(file.Name(), path)
+	return updateSessionIndex(agent.workspace, agent.sessionID, SessionInfo{ID: agent.sessionID, Title: agent.sessionTitle, CreatedAt: agent.sessionCreated, UpdatedAt: now})
 }
 
 // Transcript supplies user and assistant messages for the reopened workspace.

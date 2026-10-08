@@ -153,12 +153,12 @@ func runWorker(ctx context.Context, root string, provider llm.Provider, config C
 			}
 			return message.Content, usage, nil
 		}
-		if len(message.ToolCalls) > maxToolCallsPerResponse || actions+len(message.ToolCalls) > maxWorkerActions {
+		if actions+len(message.ToolCalls) > maxWorkerActions {
 			return "", usage, fmt.Errorf("worker exceeded its %d-action safety budget", maxWorkerActions)
 		}
 		messages = append(messages, message)
 		seenIDs := make(map[string]struct{}, len(message.ToolCalls))
-		for _, call := range message.ToolCalls {
+		for index, call := range message.ToolCalls {
 			if len(call.Arguments) > maxToolOutput {
 				return "", usage, fmt.Errorf("worker tool arguments exceed %d bytes", maxToolOutput)
 			}
@@ -171,11 +171,17 @@ func runWorker(ctx context.Context, root string, provider llm.Provider, config C
 				}
 				seenIDs[call.ID] = struct{}{}
 			}
-			if call.Name == "probe_http" {
+			if call.Name == "probe_http" && index < maxToolCallsPerResponse {
 				probes++
 				if probes > maxHTTPProbes {
 					return "", usage, fmt.Errorf("worker exceeded its %d HTTP-probe limit", maxHTTPProbes)
 				}
+			}
+			if index >= maxToolCallsPerResponse {
+				result := fmt.Sprintf("deferred: only %d worker actions are executed per response; reissue this action later", maxToolCallsPerResponse)
+				messages = append(messages, llm.Message{Role: "tool", ToolCallID: call.ID, ToolName: call.Name, Content: result})
+				actions++
+				continue
 			}
 			_, _ = fmt.Fprintf(output, "Action: %s\n", workerToolAction(call.Name, call.Arguments))
 			result, err := runWorkerTool(ctx, root, call.Name, call.Arguments, config.SecretEnvName, config.APIKey, output)
@@ -201,14 +207,17 @@ func runWorker(ctx context.Context, root string, provider llm.Provider, config C
 
 func workerToolAction(name, raw string) string {
 	switch name {
-	case "list_files", "read_file":
-		args, err := decodeToolArgs(raw, []string{"path"}, []string{"path"})
+	case "list_files", "read_file", "search_files":
+		args, err := validateArgumentsOnly(name, raw)
 		if err != nil {
 			return "Calling invalid worker tool"
 		}
 		verb := "Reading "
-		if name == "list_files" {
+		switch name {
+		case "list_files":
 			verb = "Listing "
+		case "search_files":
+			verb = "Searching for " + args["query"] + " in "
 		}
 		return verb + args["path"]
 	case "run_check":
@@ -265,8 +274,8 @@ func safeEndpoint(raw string) string {
 
 func runWorkerTool(ctx context.Context, root, name, raw, secretEnvName, secret string, output io.Writer) (string, error) {
 	switch name {
-	case "list_files", "read_file":
-		return runTool(ctx, root, name, raw, secretEnvName, secret, output)
+	case "list_files", "read_file", "search_files":
+		return runTool(ctx, root, name, raw, secretEnvName, secret, output, nil)
 	case "run_check":
 		args, err := decodeToolArgs(raw, []string{"operation", "target"}, []string{"operation", "target"})
 		if err != nil {

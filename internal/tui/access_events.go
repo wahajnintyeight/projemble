@@ -33,9 +33,6 @@ func handleAccessModeInput(id string, current *page, returnTo page, list *widget
 			}
 			*current = returnTo
 			return true, ""
-		case "<Escape>", "b", "<Backspace>":
-			*current = returnTo
-			return true, ""
 		}
 	case approvalPage:
 		switch id {
@@ -44,7 +41,7 @@ func handleAccessModeInput(id string, current *page, returnTo page, list *widget
 			*pending = nil
 			*current = agentProgressPage
 			return true, ""
-		case "<Escape>", "b", "<Backspace>":
+		case "<Escape>", "b", "B", "<Backspace>":
 			replyToPermission(*pending, false)
 			*pending = nil
 			*current = agentProgressPage

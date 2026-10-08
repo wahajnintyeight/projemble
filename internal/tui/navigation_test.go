@@ -48,6 +48,22 @@ func TestEscapeAliasesLeavePickerAndWorkspace(t *testing.T) {
 	}
 }
 
+func TestSecondaryBackKeyOnlyNavigatesOnNavigablePages(t *testing.T) {
+	for _, key := range []string{"b", "B", "<Backspace>"} {
+		if !isBackNavigationKey(key, capabilityPage) {
+			t.Errorf("%q should go back from a navigation page", key)
+		}
+		for _, page := range []page{homePage, projectNamePage, agentProgressPage} {
+			if isBackNavigationKey(key, page) {
+				t.Errorf("%q should not navigate from page %v", key, page)
+			}
+		}
+	}
+	if !isBackNavigationKey("<Escape>", homePage) {
+		t.Fatal("Escape should retain its root-page quit behavior")
+	}
+}
+
 func TestProjectProviderSelectionSurvivesReload(t *testing.T) {
 	t.Setenv("APPDATA", t.TempDir())
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
