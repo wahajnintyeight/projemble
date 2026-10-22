@@ -4,6 +4,8 @@
 
 Projemble is a Go CLI/TUI for creating projects from explicit application shapes, software architectures, and templates. It makes the project structure clear up front. An optional coding agent can then build features on that foundation.
 
+Visit the [Projemble website](https://projemble.by-wahaj.workers.dev/).
+
 [![Go 1.25+](https://img.shields.io/badge/Go-1.25%2B-00ADD8?logo=go&logoColor=white)](https://go.dev/dl/)
 [![Latest release](https://img.shields.io/github/v/release/wahajnintyeight/projemble)](https://github.com/wahajnintyeight/projemble/releases/latest)
 [![TUI: gotui](https://img.shields.io/badge/TUI-gotui-5B8DEF)](https://github.com/metaspartan/gotui)
