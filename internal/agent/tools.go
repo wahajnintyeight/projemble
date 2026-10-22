@@ -40,6 +40,12 @@ func runTool(ctx context.Context, root, name, raw, secretEnvName, secret string,
 			return "", err
 		}
 		return searchFiles(root, args["path"], args["query"])
+	case "read_skill":
+		args, err := decodeToolArgs(raw, []string{"name"}, []string{"name"})
+		if err != nil {
+			return "", err
+		}
+		return readSkill(args["name"])
 	case "write_file":
 		args, err := decodeToolArgs(raw, []string{"path", "content"}, []string{"path", "content"})
 		if err != nil {
@@ -198,7 +204,7 @@ func validateToolCallsForAccess(root string, calls []llm.ToolCall, idOptional bo
 		if err != nil {
 			return err
 		}
-		if mode == AccessReadOnly && call.Name != "list_files" && call.Name != "read_file" && call.Name != "search_files" {
+		if mode == AccessReadOnly && call.Name != "list_files" && call.Name != "read_file" && call.Name != "search_files" && call.Name != "read_skill" {
 			return fmt.Errorf("read-only mode blocks %s", call.Name)
 		}
 		if call.Name == "list_files" || call.Name == "read_file" || call.Name == "write_file" || call.Name == "edit_file" || call.Name == "search_files" {
@@ -247,6 +253,8 @@ func validateArgumentsOnly(name, raw string) (map[string]string, error) {
 		return decodeReadFileArguments(raw)
 	case "search_files":
 		return decodeSearchArguments(raw)
+	case "read_skill":
+		return decodeToolArgs(raw, []string{"name"}, []string{"name"})
 	case "write_file":
 		return decodeToolArgs(raw, []string{"path", "content"}, []string{"path", "content"})
 	case "edit_file":
@@ -360,6 +368,8 @@ func toolAction(name, raw string) string {
 		return "Creating " + cleanPermissionTarget(args["path"])
 	case "edit_file":
 		return "Editing " + cleanPermissionTarget(args["path"])
+	case "read_skill":
+		return "Loading skill " + cleanPermissionTarget(args["name"])
 	case "undo_last_edit":
 		return "Undoing the last agent edit"
 	case "run_go_check":
@@ -428,6 +438,8 @@ func toolOutcome(name, raw, result string) string {
 			}
 		}
 		return fmt.Sprintf("Found %d code matches", count)
+	case "read_skill":
+		return fmt.Sprintf("Loaded skill %s (%d bytes)", args["name"], len(result))
 	case "write_file":
 		return fmt.Sprintf("%s (%d bytes)", result, len(args["content"]))
 	case "edit_file", "undo_last_edit":
@@ -460,6 +472,12 @@ func permissionForTool(name, raw string) (PermissionRequest, error) {
 			target += " for " + args["query"]
 		}
 		return PermissionRequest{Action: action, Target: cleanPermissionTarget(target)}, nil
+	case "read_skill":
+		args, err := decodeToolArgs(raw, []string{"name"}, []string{"name"})
+		if err != nil {
+			return PermissionRequest{}, err
+		}
+		return PermissionRequest{Action: "Load packaged skill guidance", Target: cleanPermissionTarget(args["name"])}, nil
 	case "write_file":
 		args, err := decodeToolArgs(raw, []string{"path", "content"}, []string{"path", "content"})
 		if err != nil {

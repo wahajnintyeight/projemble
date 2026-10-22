@@ -105,3 +105,33 @@ func TestConfigAcceptsSupportedAgentAccessModes(t *testing.T) {
 		}
 	}
 }
+
+func TestNormalizeProjectFillsChoicesForOldProfiles(t *testing.T) {
+	old := Project{Name: "legacy", TemplateID: catalog.TemplateGoMicroservicesLayered, Capabilities: []string{catalog.CapabilityPostgres}}
+	got := NormalizeProject(old)
+	if got.Choices[catalog.StepDatabase] != catalog.CapabilityPostgres || got.Choices[catalog.StepServiceFramework] != "go-micro" {
+		t.Fatalf("choices = %v", got.Choices)
+	}
+	plain := NormalizeProject(Project{Name: "plain", TemplateID: catalog.TemplateGoMonolithLayered})
+	if plain.Choices[catalog.StepDatabase] != catalog.OptionNone {
+		t.Fatalf("choices = %v", plain.Choices)
+	}
+	if _, ok := plain.Choices[catalog.StepServiceFramework]; ok {
+		t.Fatalf("monolith should not choose a service framework: %v", plain.Choices)
+	}
+	explicit := NormalizeProject(Project{Name: "x", TemplateID: catalog.TemplateGoMonolithLayered, Choices: map[string]string{catalog.StepDatabase: catalog.CapabilitySQLite}})
+	if explicit.Choices[catalog.StepDatabase] != catalog.CapabilitySQLite {
+		t.Fatalf("explicit choice was overwritten: %v", explicit.Choices)
+	}
+}
+
+func TestOldProfileResolvesToItsOwnPlan(t *testing.T) {
+	project := NormalizeProject(Project{Name: "legacy", TemplateID: catalog.TemplateGoMicroservicesLayered, Capabilities: []string{catalog.CapabilityMySQL}})
+	plan, err := catalog.Resolve(catalog.SelectionFor(project.WorkloadID, project.TopologyID, project.Choices), project.Preset)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(plan.Modules) != 2 || plan.GoVersion != catalog.GoBaseline {
+		t.Fatalf("plan = %+v", plan)
+	}
+}

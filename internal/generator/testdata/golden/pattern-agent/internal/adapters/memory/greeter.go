@@ -1,0 +1,13 @@
+package memory
+
+import "example.com/sample-app/internal/domain"
+
+type Greeter struct{}
+
+func New() Greeter {
+	return Greeter{}
+}
+
+func (Greeter) Greet() domain.Greeting {
+	return "Project is running."
+}

@@ -42,7 +42,7 @@ func TestRunUsesWorkspaceToolsAndEngineeringPrompt(t *testing.T) {
 			t.Errorf("decode request: %v", err)
 			return
 		}
-		if request.ToolChoice != "auto" || len(request.Tools) != 9 {
+		if request.ToolChoice != "auto" || len(request.Tools) != 10 {
 			t.Errorf("tools not enabled: mode=%q count=%d", request.ToolChoice, len(request.Tools))
 		}
 		if requestCount == 1 {
@@ -371,7 +371,7 @@ func TestLocalProviderMayOmitAPIKey(t *testing.T) {
 func TestReadOnlyModeHidesAndRejectsWriteTools(t *testing.T) {
 	root := t.TempDir()
 	tools := llmToolsForAccess(AccessReadOnly)
-	if len(tools) != 3 || tools[0].Name != "list_files" || tools[1].Name != "search_files" || tools[2].Name != "read_file" {
+	if len(tools) != 4 || tools[0].Name != "list_files" || tools[1].Name != "search_files" || tools[2].Name != "read_file" || tools[3].Name != "read_skill" {
 		t.Fatalf("read-only tools = %+v", tools)
 	}
 	write := []llm.ToolCall{{ID: "write", Name: "write_file", Arguments: `{"path":"note.txt","content":"no"}`}}
@@ -385,7 +385,7 @@ func TestReadOnlyModeHidesAndRejectsWriteTools(t *testing.T) {
 	if err := validateToolCallsForAccess(root, delegate, false, AccessReadOnly); err == nil {
 		t.Fatal("read-only mode accepted worker execution")
 	}
-	if got := len(llmToolsForAccess(AccessAskAlways)); got != 9 {
+	if got := len(llmToolsForAccess(AccessAskAlways)); got != 10 {
 		t.Fatalf("ask-always tools = %d, want discovery/edit/Go/shell/swarm operations", got)
 	}
 }

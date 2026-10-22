@@ -1,0 +1,16 @@
+package handler
+
+import (
+	"fmt"
+	"net/http"
+
+	"{{.Module}}/internal/service"
+)
+
+func New() http.Handler {
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = fmt.Fprintln(w, service.Hello())
+	})
+	return mux
+}

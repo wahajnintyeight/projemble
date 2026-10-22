@@ -23,6 +23,7 @@ var focusedSkills = map[string]string{
 	"rag":        "RAG: separate ingestion, chunking, embedding, retrieval, and response generation; cite retrieved sources and handle empty results.",
 	"agent":      "Agent: expose narrow typed tools, validate arguments, bound tool calls, and require approval for consequential actions.",
 	"chatbot":    "Chatbot: isolate channel adapters from conversation logic and persist history only through explicit storage boundaries.",
+	"efficient":  "Efficiency: keep queries, pagination, fan-out, pools, retries, caches, and buffers bounded; remove N+1 and unbounded reads up front; never claim speedups or capacity without measurement. Load read_skill efficient-code before database, concurrency, bulk, or performance-sensitive work.",
 	"security":   "Security: validate at trust boundaries, minimize privileges, protect secrets, and never execute untrusted input as commands.",
 	"testing":    "Verification: add focused tests for changed behavior; report which tests, vet, and build actually ran.",
 	"deployment": "Deployment: keep environment-specific configuration outside source and document health, shutdown, and operational requirements.",
@@ -32,27 +33,27 @@ func SkillsForProfile(profile ProfileContext) []string {
 	ids := []string{"go", "security", "testing"}
 	switch profile.Workload {
 	case "http-api":
-		ids = append(ids, "service")
+		ids = append(ids, "service", "efficient")
 	case "cli":
 		ids = append(ids, "cli")
 	case "one-shot-job", "background-worker":
-		ids = append(ids, "jobs")
+		ids = append(ids, "jobs", "efficient")
 	case "library":
 		ids = append(ids, "library")
 	}
 	for _, capability := range profile.Capabilities {
 		switch {
 		case strings.HasPrefix(capability, "database-mongodb"):
-			ids = append(ids, "mongodb")
+			ids = append(ids, "mongodb", "efficient")
 		case strings.HasPrefix(capability, "database-"):
-			ids = append(ids, "sql")
+			ids = append(ids, "sql", "efficient")
 		case capability == "delivery-deployment":
 			ids = append(ids, "deployment")
 		}
 	}
 	for _, pattern := range profile.Patterns {
 		if pattern == "standard-backend" {
-			ids = append(ids, "service")
+			ids = append(ids, "service", "efficient")
 		} else if pattern == "rag" || pattern == "agent" || pattern == "chatbot" {
 			ids = append(ids, pattern)
 		}

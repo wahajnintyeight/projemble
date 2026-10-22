@@ -1,0 +1,21 @@
+package main
+
+import (
+	"log"
+	"net/http"
+
+	"{{.Module}}/internal/adapters/memory"
+	"{{.Module}}/internal/application"
+	"{{.Module}}/internal/transport/httpapi"
+)
+
+func main() {
+	service := application.New(memory.New())
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	})
+	mux.Handle("/", httpapi.New(service))
+	log.Println("listening on :8080")
+	log.Fatal(http.ListenAndServe(":8080", mux))
+}

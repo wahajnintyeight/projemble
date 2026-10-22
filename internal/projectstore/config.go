@@ -53,6 +53,8 @@ type Project struct {
 	TemplateID      string            `yaml:"template"`
 	PatternIDs      []string          `yaml:"patterns,omitempty"`
 	Capabilities    []string          `yaml:"capabilities,omitempty"`
+	Preset          string            `yaml:"preset,omitempty"`
+	Choices         map[string]string `yaml:"choices,omitempty"`
 	GenerationMode  string            `yaml:"generation_mode,omitempty"`
 	AIProvider      string            `yaml:"ai_provider,omitempty"`
 	AIModel         string            `yaml:"ai_model,omitempty"`
@@ -256,6 +258,7 @@ func NormalizeProject(project Project) Project {
 	if project.Capabilities == nil {
 		project.Capabilities = []string{}
 	}
+	project.Choices = defaultChoices(project)
 	return project
 }
 
@@ -360,4 +363,25 @@ func newID() (string, error) {
 		return "", fmt.Errorf("generate project id: %w", err)
 	}
 	return hex.EncodeToString(id[:]), nil
+}
+
+func defaultChoices(project Project) map[string]string {
+	choices := map[string]string{}
+	for key, value := range project.Choices {
+		choices[key] = value
+	}
+	if _, ok := choices[catalog.StepDatabase]; !ok {
+		choices[catalog.StepDatabase] = catalog.OptionNone
+		for _, id := range project.Capabilities {
+			if capability, found := catalog.CapabilityByID(id); found && capability.Category == "Primary database" {
+				choices[catalog.StepDatabase] = id
+			}
+		}
+	}
+	if project.TopologyID == catalog.TopologyMicroservices {
+		if _, ok := choices[catalog.StepServiceFramework]; !ok {
+			choices[catalog.StepServiceFramework] = "go-micro"
+		}
+	}
+	return choices
 }

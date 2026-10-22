@@ -1,0 +1,30 @@
+# {{.Name}}
+
+{{.Description}}
+
+Generated from Projemble template `{{.TemplateID}}` ({{.TemplateName}}).
+
+## Run
+
+```sh
+{{.Run}}
+```
+
+## Verify
+
+```sh
+go test ./...
+go vet ./...
+go build ./...
+```
+
+Go module: `{{.Module}}`.
+{{if .OneShot}}
+## Adapt the pipeline
+
+Use the ordered stages in `cmd/job/main.go` for your task. For a scraper, implement fetch and parse stages; for ETL, implement extract, transform, and load. Return an error from a failed stage to stop the run. The pipeline accepts a context and exits when the work is done.
+{{end}}{{if .PatternList}}
+Application patterns: {{.PatternList}}. Pattern contracts are generated under `internal/pattern/`.
+{{end}}{{range .Databases}}
+Database: {{.}}. Pass its connection URL to `storage.Open` before using the generated storage adapter.
+{{end}}

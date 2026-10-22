@@ -1,0 +1,33 @@
+package main
+
+import (
+	"context"
+	"log"
+
+	"go-micro.dev/v6"
+	_ "go-micro.dev/v6/cmd/defaults"
+)
+
+type ListRequest struct{}
+
+type ListResponse struct {
+	Items []string
+}
+
+type CatalogService struct{}
+
+func (*CatalogService) List(_ context.Context, _ *ListRequest, response *ListResponse) error {
+	response.Items = []string{}
+	return nil
+}
+
+func main() {
+	service := micro.NewService({{printf "%q" .CatalogServiceName}})
+	service.Init()
+	if err := service.Handle(&CatalogService{}); err != nil {
+		log.Fatal(err)
+	}
+	if err := service.Run(); err != nil {
+		log.Fatal(err)
+	}
+}
