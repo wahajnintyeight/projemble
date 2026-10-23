@@ -19,6 +19,9 @@ type part struct {
 }
 
 type templateData struct {
+	Logger             string
+	HTTPRuntime        bool
+	HasTests           bool
 	Module             string
 	Name               string
 	Description        string
@@ -44,6 +47,10 @@ func renderPart(item part, data templateData) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("read template %s: %w", item.source, err)
 	}
+	return renderSource(item, data, source)
+}
+
+func renderSource(item part, data templateData, source []byte) (string, error) {
 	parsed, err := texttemplate.New(item.source).Parse(string(source))
 	if err != nil {
 		return "", fmt.Errorf("parse template %s: %w", item.source, err)

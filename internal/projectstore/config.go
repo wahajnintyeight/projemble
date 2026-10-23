@@ -378,6 +378,14 @@ func defaultChoices(project Project) map[string]string {
 			}
 		}
 	}
+	if project.WorkloadID == catalog.WorkloadHTTPAPI && project.TopologyID == catalog.TopologyMonolith {
+		if _, ok := choices[catalog.StepLogging]; !ok {
+			choices[catalog.StepLogging] = "fmt"
+			if project.Preset == catalog.PresetRecommended {
+				choices[catalog.StepLogging] = "slog"
+			}
+		}
+	}
 	if project.TopologyID == catalog.TopologyMicroservices {
 		if _, ok := choices[catalog.StepServiceFramework]; !ok {
 			choices[catalog.StepServiceFramework] = "go-micro"

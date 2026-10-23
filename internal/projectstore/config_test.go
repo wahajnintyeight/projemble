@@ -135,3 +135,18 @@ func TestOldProfileResolvesToItsOwnPlan(t *testing.T) {
 		t.Fatalf("plan = %+v", plan)
 	}
 }
+
+func TestRuntimeLoggingChoiceDefaults(t *testing.T) {
+	for _, tc := range []struct{ preset, explicit, want string }{
+		{"", "", "fmt"}, {catalog.PresetRecommended, "", "slog"}, {catalog.PresetRecommended, "fmt", "fmt"},
+	} {
+		choices := map[string]string{}
+		if tc.explicit != "" {
+			choices[catalog.StepLogging] = tc.explicit
+		}
+		project := NormalizeProject(Project{Name: "runtime", TemplateID: catalog.TemplateGoMonolithLayered, Preset: tc.preset, Choices: choices})
+		if project.Choices[catalog.StepLogging] != tc.want {
+			t.Fatalf("%+v: %v", tc, project.Choices)
+		}
+	}
+}

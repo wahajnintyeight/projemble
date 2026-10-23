@@ -14,7 +14,7 @@ type Preset struct {
 
 var presets = []Preset{
 	{ID: PresetMinimal, Name: "Minimal (stdlib)", Description: "Standard library only; no extra dependencies beyond the chosen database driver", Choices: map[string]string{}},
-	{ID: PresetRecommended, Name: "Recommended", Description: "The recommended option on every step", Choices: map[string]string{}},
+	{ID: PresetRecommended, Name: "Recommended", Description: "The recommended option on every step", Choices: map[string]string{StepLogging: "slog"}},
 }
 
 func Presets() []Preset {

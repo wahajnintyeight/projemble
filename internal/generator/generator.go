@@ -89,6 +89,9 @@ func newTemplateData(project projectstore.Project, template catalog.Template, mo
 	modules := projectModules(project, template.AppShapeID == catalog.ShapeMicroservices)
 	data := templateData{
 		Module:             module,
+		Logger:             runtimeLogger(project),
+		HTTPRuntime:        template.AppShapeID == catalog.ShapeMonolith,
+		HasTests:           template.WorkloadID == catalog.WorkloadLibrary,
 		Name:               project.Name,
 		Description:        project.Description,
 		TemplateID:         template.ID,
@@ -185,6 +188,11 @@ func Validate(project projectstore.Project) error {
 	}
 	if project.WorkloadID != template.WorkloadID || project.TopologyID != template.TopologyID {
 		return fmt.Errorf("selected workload/topology do not match template %q", template.ID)
+	}
+	if template.AppShapeID == catalog.ShapeMonolith {
+		if logger := runtimeLogger(project); logger != "fmt" && logger != "slog" {
+			return fmt.Errorf("unsupported logging option %q", logger)
+		}
 	}
 	seen := map[string]bool{}
 	for _, id := range project.PatternIDs {

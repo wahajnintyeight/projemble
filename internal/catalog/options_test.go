@@ -179,3 +179,18 @@ func TestCompareGoVersions(t *testing.T) {
 		}
 	}
 }
+
+func TestRuntimeLoggerPresets(t *testing.T) {
+	for _, tc := range []struct{ preset, explicit, want string }{
+		{"", "", "fmt"}, {PresetMinimal, "", "fmt"}, {PresetRecommended, "", "slog"}, {PresetRecommended, "fmt", "fmt"},
+	} {
+		choices := map[string]string{}
+		if tc.explicit != "" {
+			choices[StepLogging] = tc.explicit
+		}
+		plan, err := Resolve(httpSelection(TopologyMonolith, choices), tc.preset)
+		if err != nil || plan.Choices[StepLogging] != tc.want {
+			t.Fatalf("%+v: %+v %v", tc, plan, err)
+		}
+	}
+}

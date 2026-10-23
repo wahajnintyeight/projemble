@@ -1,6 +1,13 @@
 package catalog
 
 var steps = []Step{
+	{ID: StepLogging, Name: "Logging", Question: "Which logger writes application events?",
+		AppliesTo: func(s Selection) bool {
+			return s[ContextWorkload] == WorkloadHTTPAPI && s[ContextTopology] == TopologyMonolith
+		},
+		Default: func(Selection) string { return "fmt" },
+		Options: []Option{{ID: "fmt", Name: "fmt", Summary: "Standard-library key=value logging", Status: StatusSupported}, {ID: "slog", Name: "slog", Summary: "Structured JSON logging", Status: StatusRecommended}},
+	},
 	{
 		ID:       StepServiceFramework,
 		Name:     "Service framework",

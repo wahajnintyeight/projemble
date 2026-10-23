@@ -20,6 +20,7 @@ const (
 const (
 	StepServiceFramework = "service-framework"
 	StepDatabase         = "database"
+	StepLogging          = "logging"
 
 	ContextWorkload = "workload"
 	ContextTopology = "topology"

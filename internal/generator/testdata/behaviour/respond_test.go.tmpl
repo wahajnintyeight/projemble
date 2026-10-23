@@ -1,0 +1,49 @@
+package respond
+
+import (
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+)
+
+func TestDecodeAndProblem(t *testing.T) {
+	for _, tc := range []struct {
+		body   string
+		limit  int64
+		status int
+	}{
+		{`{"name":"ok"}`, 100, 200}, {`{"unknown":1}`, 100, 400}, {`{} {}`, 100, 400}, {``, 100, 400}, {`{"name":"long"}`, 4, 413},
+	} {
+		r := httptest.NewRequest("POST", "/", strings.NewReader(tc.body))
+		w := httptest.NewRecorder()
+		r.Body = http.MaxBytesReader(w, r.Body, tc.limit)
+		var value struct {
+			Name string `json:"name"`
+		}
+		ok := Decode(w, r, &value)
+		if ok != (tc.status == 200) || w.Code != tc.status {
+			t.Fatalf("%q: %d %v", tc.body, w.Code, ok)
+		}
+	}
+	w := httptest.NewRecorder()
+	Problem(w, 503)
+	var value ProblemDetails
+	if err := json.Unmarshal(w.Body.Bytes(), &value); err != nil {
+		t.Fatal(err)
+	}
+	if value.Status != 503 || value.Type != "about:blank" || w.Header().Get("Content-Type") != "application/problem+json" {
+		t.Fatal(w)
+	}
+	w = httptest.NewRecorder()
+	JSON(w, 200, make(chan int))
+	if w.Code != 500 {
+		t.Fatal(w.Code)
+	}
+	w = httptest.NewRecorder()
+	JSON(w, 201, map[string]string{"ok": "yes"})
+	if w.Code != 201 || w.Header().Get("Content-Type") != "application/json" {
+		t.Fatal(w)
+	}
+}

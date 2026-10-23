@@ -31,6 +31,7 @@ func goldenCases() map[string]projectstore.Project {
 	for _, pattern := range catalog.Patterns() {
 		cases["pattern-"+pattern.ID] = projectstore.Project{Name: "sample-app", Path: "unused", TemplateID: catalog.TemplateGoMonolithClean, PatternIDs: []string{pattern.ID}}
 	}
+	cases["recommended-http"] = projectstore.Project{Name: "sample-app", Path: "unused", TemplateID: catalog.TemplateGoMonolithLayered, Preset: catalog.PresetRecommended}
 	cases["composed"] = projectstore.Project{
 		Name:         "sample-app",
 		Path:         "unused",
@@ -63,6 +64,9 @@ func TestGoldenOutput(t *testing.T) {
 				writeGolden(t, dir, files)
 			}
 			assertGolden(t, dir, files)
+			if _, err := staticQuality(dir, false); err != nil {
+				t.Fatal(err)
+			}
 		})
 	}
 }

@@ -1,12 +1,14 @@
 package generator
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"projemble/internal/catalog"
 	"projemble/internal/projectstore"
@@ -15,6 +17,7 @@ import (
 func TestGenerateEveryCatalogTemplate(t *testing.T) {
 	for _, template := range catalog.Templates() {
 		t.Run(template.ID, func(t *testing.T) {
+			t.Parallel()
 			root := t.TempDir()
 			project := projectstore.Project{Name: "sample-app", Description: "A demo", Path: root, TemplateID: template.ID}
 			if err := Generate(project); err != nil {
@@ -38,17 +41,14 @@ func TestGenerateEveryCatalogTemplate(t *testing.T) {
 				if _, err := os.Stat(filepath.Join(root, "cmd", "catalog", "main.go")); err != nil {
 					t.Errorf("second service entrypoint missing: %v", err)
 				}
-				if err := runGo(root, "mod", "tidy"); err != nil {
-					t.Fatalf("tidy generated module: %v", err)
-				}
 			}
 			if template.AppShapeID == catalog.ShapeOneShotJob && !strings.Contains(string(mainSource), "NewPipeline") {
 				t.Error("one-shot template does not run a pipeline")
 			}
-			if err := verifyGenerated(root); err != nil {
+			if err := assertQualityBar(root, template.WorkloadID == catalog.WorkloadLibrary); err != nil {
 				t.Fatalf("generated starter verification: %v", err)
 			}
-			if template.AppShapeID == catalog.ShapeOneShotJob {
+			if template.AppShapeID == catalog.ShapeOneShotJob && !testing.Short() {
 				if err := runGo(root, "run", "./cmd/job"); err != nil {
 					t.Fatalf("generated one-shot job does not run: %v", err)
 				}
@@ -63,29 +63,25 @@ func TestGenerateEveryCatalogTemplate(t *testing.T) {
 func TestGenerateSupportedDatabaseAndPatternCombinations(t *testing.T) {
 	for _, capability := range catalog.SupportedCapabilities("Primary database") {
 		t.Run(capability.ID, func(t *testing.T) {
+			t.Parallel()
 			root := t.TempDir()
 			project := projectstore.Project{Name: "sample-app", Path: root, TemplateID: catalog.TemplateGoMonolithLayered, Capabilities: []string{capability.ID}}
 			if err := Generate(project); err != nil {
 				t.Fatal(err)
 			}
-			if err := runGo(root, "mod", "tidy"); err != nil {
-				t.Fatalf("tidy generated module: %v", err)
-			}
-			if err := verifyGenerated(root); err != nil {
+			if err := assertQualityBar(root, false); err != nil {
 				t.Fatalf("verify generated module: %v", err)
 			}
 		})
 	}
 	t.Run("composed-patterns", func(t *testing.T) {
+		t.Parallel()
 		root := t.TempDir()
 		project := projectstore.Project{Name: "sample-app", Path: root, TemplateID: catalog.TemplateGoMonolithLayered, PatternIDs: []string{catalog.PatternBackend, catalog.PatternRAG, catalog.PatternAgent, catalog.PatternChatbot}, Capabilities: []string{catalog.CapabilitySQLite}}
 		if err := Generate(project); err != nil {
 			t.Fatal(err)
 		}
-		if err := runGo(root, "mod", "tidy"); err != nil {
-			t.Fatalf("tidy generated module: %v", err)
-		}
-		if err := verifyGenerated(root); err != nil {
+		if err := assertQualityBar(root, false); err != nil {
 			t.Fatalf("verify generated patterns: %v", err)
 		}
 	})
@@ -112,18 +108,20 @@ func generatedPaths(template catalog.Template) (string, string) {
 	}
 }
 
-func verifyGenerated(root string) error {
-	for _, check := range [][]string{{"test", "./..."}, {"vet", "./..."}, {"build", "./..."}} {
-		if err := runGo(root, check...); err != nil {
-			return err
-		}
-	}
-	return nil
-}
+var goCommands = make(chan struct{}, 2)
 
 func runGo(dir string, args ...string) error {
-	command := exec.Command("go", args...)
+	goCommands <- struct{}{}
+	defer func() { <-goCommands }()
+	if len(args) > 0 && (args[0] == "test" || args[0] == "vet" || args[0] == "build") {
+		args = append([]string{args[0], "-p=2"}, args[1:]...)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+	command := exec.CommandContext(ctx, "go", args...)
+	command.Env = append(os.Environ(), "GOWORK=off")
 	command.Dir = dir
+	command.WaitDelay = 5 * time.Second
 	output, err := command.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("go %s: %w\n%s", strings.Join(args, " "), err, output)

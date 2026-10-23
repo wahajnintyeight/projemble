@@ -1,0 +1,23 @@
+package logging
+import ("bytes"; "encoding/json"; "strings"; "sync"; "testing")
+func TestLevelsAndFields(t *testing.T) {
+ var output bytes.Buffer
+ log := New(&output,"warn")
+ log.Debug("hidden"); log.Info("hidden")
+ log.With("request_id","abc").Warn("hello\nworld","key","a b", "odd")
+ log.Error("failure")
+ text := output.String()
+ if strings.Contains(text,"hidden") || strings.Count(text,"\n") != 2 || !strings.Contains(text,"request_id") || !strings.Contains(text,"abc") { t.Fatal(text) }
+ {{if eq .Logger "slog"}}
+ var event map[string]any
+ if err := json.Unmarshal([]byte(strings.Split(text,"\n")[0]), &event); err != nil { t.Fatal(err) }
+ {{else}}
+ _ = json.Valid
+ if !strings.Contains(text, `key="a b"`) || !strings.Contains(text, `msg="hello\nworld"`) { t.Fatal(text) }
+ {{end}}
+ output.Reset()
+ var wg sync.WaitGroup
+ for i:=0;i<8;i++ { wg.Add(1); go func() { defer wg.Done(); log.With("worker",1).Error("concurrent") }() }
+ wg.Wait()
+ if strings.Count(output.String(),"\n") != 8 { t.Fatal(output.String()) }
+}

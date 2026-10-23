@@ -1,0 +1,20 @@
+package main
+
+import (
+	"context"
+	"io"
+	"strings"
+	"testing"
+)
+
+func TestRunInvalidConfig(t *testing.T) {
+	err := run(context.Background(), func(key string) string {
+		if key == "LOG_LEVEL" {
+			return "invalid"
+		}
+		return ""
+	}, io.Discard)
+	if err == nil || !strings.Contains(err.Error(), "LOG_LEVEL") {
+		t.Fatal(err)
+	}
+}

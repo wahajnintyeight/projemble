@@ -1,0 +1,79 @@
+package middleware
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+	"time"
+
+	"{{.Module}}/internal/platform/logging"
+	"{{.Module}}/internal/platform/respond"
+)
+
+func TestMiddleware(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		handler http.HandlerFunc
+		body    string
+		status  int
+	}{
+		{"ok", func(w http.ResponseWriter, r *http.Request) {
+			if RequestID(r.Context()) == "" {
+				t.Error("missing request ID")
+			}
+			if deadline, ok := r.Context().Deadline(); !ok || time.Until(deadline) > time.Second {
+				t.Error("missing deadline")
+			}
+			w.WriteHeader(201)
+		}, "", 201},
+		{"panic", func(w http.ResponseWriter, r *http.Request) { panic("secret") }, "", 500},
+		{"large", func(w http.ResponseWriter, r *http.Request) { t.Error("oversized request reached handler") }, "12345", 413},
+		{"deadline", func(w http.ResponseWriter, r *http.Request) {
+			<-r.Context().Done()
+			if r.Context().Err() != context.DeadlineExceeded {
+				t.Error(r.Context().Err())
+			}
+			respond.Problem(w, 504)
+		}, "", 504},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var logs bytes.Buffer
+			h := Wrap(tc.handler, logging.New(&logs, "info"), 4, time.Millisecond)
+			r := httptest.NewRequest("POST", "/?token=secret", strings.NewReader(tc.body))
+			r.Header.Set("X-Request-ID", "untrusted")
+			w := httptest.NewRecorder()
+			h.ServeHTTP(w, r)
+			if w.Code != tc.status || len(w.Header().Get("X-Request-ID")) != 32 {
+				t.Fatal(w)
+			}
+			if strings.Contains(logs.String(), "secret") || !strings.Contains(logs.String(), w.Header().Get("X-Request-ID")) {
+				t.Fatal(logs.String())
+			}
+			if tc.status >= 400 && !json.Valid(w.Body.Bytes()) {
+				t.Fatal(w.Body.String())
+			}
+		})
+	}
+}
+func TestChunkedBodyAndCommittedPanic(t *testing.T) {
+	var logs bytes.Buffer
+	h := Wrap(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { var value any; respond.Decode(w, r, &value) }), logging.New(&logs, "info"), 4, time.Second)
+	r := httptest.NewRequest("POST", "/", strings.NewReader(`{"large":true}`))
+	r.ContentLength = -1
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, r)
+	if w.Code != 413 {
+		t.Fatal(w.Code)
+	}
+	h = Wrap(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(200); panic("secret") }), logging.New(&logs, "info"), 4, time.Second)
+	defer func() {
+		if recover() != http.ErrAbortHandler {
+			t.Error("started response was not aborted")
+		}
+	}()
+	h.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest("GET", "/", nil))
+}

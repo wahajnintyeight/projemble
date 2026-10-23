@@ -1,0 +1,112 @@
+package httpserver
+
+import (
+	"context"
+	"errors"
+	"io"
+	"net"
+	"net/http"
+	"testing"
+	"time"
+
+	"{{.Module}}/internal/config"
+)
+
+func TestGracefulShutdown(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	started, release := make(chan struct{}), make(chan struct{})
+	server := New(config.Config{}, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { close(started); <-release; w.WriteHeader(204) }))
+	if server.ReadHeaderTimeout != 5*time.Second || server.ReadTimeout != 15*time.Second || server.WriteTimeout != 30*time.Second || server.IdleTimeout != 60*time.Second || server.MaxHeaderBytes != 1<<20 {
+		t.Fatal(server)
+	}
+	done := make(chan error, 1)
+	go func() { done <- Serve(ctx, server, listener, time.Second) }()
+	requestDone := make(chan error, 1)
+	go func() {
+		client := http.Client{Timeout: 2 * time.Second}
+		res, err := client.Get("http://" + listener.Addr().String())
+		if err == nil {
+			_, err = io.Copy(io.Discard, res.Body)
+			res.Body.Close()
+			if res.StatusCode != 204 {
+				err = errors.New("unexpected status")
+			}
+		}
+		requestDone <- err
+	}()
+	select {
+	case <-started:
+	case <-time.After(3 * time.Second):
+		close(release)
+		t.Fatal("request not started")
+	}
+	cancel()
+	select {
+	case err := <-done:
+		close(release)
+		t.Fatalf("shutdown did not drain: %v", err)
+	case <-time.After(20 * time.Millisecond):
+	}
+	close(release)
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("shutdown stuck")
+	}
+	if err := <-requestDone; err != nil {
+		t.Fatal(err)
+	}
+}
+func TestShutdownDeadlineAndServeFailure(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	started, release := make(chan struct{}), make(chan struct{})
+	defer close(release)
+	server := New(config.Config{}, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { close(started); <-release }))
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- Serve(ctx, server, listener, time.Millisecond) }()
+	client := http.Client{Timeout: time.Second}
+	requestDone := make(chan struct{})
+	go func() {
+		defer close(requestDone)
+		res, err := client.Get("http://" + listener.Addr().String())
+		if err == nil {
+			res.Body.Close()
+		}
+	}()
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("request not started")
+	}
+	cancel()
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatal(err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("shutdown stuck")
+	}
+	<-requestDone
+	closed, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	closed.Close()
+	if err := Serve(context.Background(), New(config.Config{}, http.NotFoundHandler()), closed, time.Second); err == nil {
+		t.Fatal("closed listener accepted")
+	}
+}

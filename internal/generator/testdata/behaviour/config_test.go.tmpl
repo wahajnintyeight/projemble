@@ -1,0 +1,34 @@
+package config
+
+import (
+	"testing"
+	"time"
+)
+
+func TestLoad(t *testing.T) {
+	cfg, err := (EnvLoader{Getenv: func(string) string { return "" }}).Load()
+	if err != nil || cfg.Address != ":8080" || cfg.MaxBodyBytes != 1<<20 || cfg.RequestTimeout != 10*time.Second {
+		t.Fatalf("%+v %v", cfg, err)
+	}
+	for _, tc := range []struct{ key, value string }{
+		{"HTTP_ADDR", "bad"}, {"HTTP_ADDR", ":65536"}, {"LOG_LEVEL", "secret"}, {"REQUEST_TIMEOUT", "0s"}, {"REQUEST_TIMEOUT", "26s"}, {"SHUTDOWN_TIMEOUT", "-1s"}, {"MAX_BODY_BYTES", "0"}, {"MAX_BODY_BYTES", "16777217"},
+	} {
+		t.Run(tc.key+tc.value, func(t *testing.T) {
+			_, err := (EnvLoader{Getenv: func(key string) string {
+				if key == tc.key {
+					return tc.value
+				}
+				return ""
+			}}).Load()
+			if err == nil {
+				t.Fatal("invalid configuration accepted")
+			}
+		})
+	}
+	cfg, err = (EnvLoader{Getenv: func(key string) string {
+		return map[string]string{"HTTP_ADDR": "127.0.0.1:0", "LOG_LEVEL": "DEBUG", "MAX_BODY_BYTES": "32", "REQUEST_TIMEOUT": "1s"}[key]
+	}}).Load()
+	if err != nil || cfg.MaxBodyBytes != 32 || cfg.LogLevel != "debug" {
+		t.Fatalf("%+v %v", cfg, err)
+	}
+}

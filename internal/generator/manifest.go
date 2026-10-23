@@ -33,6 +33,9 @@ func partsFor(project projectstore.Project, template catalog.Template) ([]part, 
 		return nil, err
 	}
 	parts = append(parts, workload...)
+	if template.AppShapeID == catalog.ShapeMonolith {
+		parts = append(parts, runtimeParts(project)...)
+	}
 	features, err := featureParts(project)
 	if err != nil {
 		return nil, err
